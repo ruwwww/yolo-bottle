@@ -2,7 +2,7 @@ param(
     [string]$Source = "0",
     [string]$PayImage = "",
     [string]$Model = "weights\multiclass_best.pt",
-    [string]$Menu = "menu_multiclass.csv",
+    [string]$Menu = "menu.csv",
     [double]$Conf = 0.35,
     [string]$Save = "",
     [switch]$Fullscreen

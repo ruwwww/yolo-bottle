@@ -5,16 +5,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
 DATASET = ROOT / "dataset"
-RAW_IMAGES = DATASET / "raw" / "images"
-RAW_LABELS = DATASET / "raw" / "labels"
 WEIGHTS = ROOT / "weights"
 RUNS = ROOT / "runs"
 BUILD = ROOT / "build"
-
-CLASSES = ["bottle"]
-BOTTLE_COCO_ID = 39
 
 
 def load_env(path: Path | None = None) -> None:

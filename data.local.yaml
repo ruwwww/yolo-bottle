@@ -1,7 +1,0 @@
-path: C:\Users\darlis\yolo-bottle\dataset
-train: images/train
-val: images/val
-names:
-  0: bottle
-  1: ballpoint_box
-  2: computer_mouse

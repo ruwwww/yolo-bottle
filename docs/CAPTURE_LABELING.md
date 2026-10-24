@@ -140,7 +140,7 @@ Pintasan: `.\scripts\7_train_kelas.ps1`.
 ## 4. Pakai model
 
 ```powershell
-.venv\Scripts\python.exe src\demo_yolo.py --weights weights\multiclass_best.pt
+.venv\Scripts\python.exe src\kasir_kulkas.py --detector yolo --model weights\multiclass_best.pt
 ```
 
 Untuk kasir: tambahkan baris kelas + harga di `menu.csv` (nama kelas harus sama

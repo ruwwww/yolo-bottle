@@ -1,10 +1,10 @@
-"""Latih model botol di server GPU via SSH, lalu tarik weight-nya kembali.
+"""Latih model di server GPU via SSH, lalu tarik weight-nya kembali.
 
 Alur:
   1. pack dataset lokal (images/labels train+val) -> tar.gz
-  2. upload ke remote (scp)
-  3. install env remote (venv + torch cu128 + ultralytics) lalu train
-  4. polling log (tahan disconnect), lalu scp best.pt -> weights/bottle_best.pt
+  2. upload ke remote (scp, hanya kalau berubah)
+  3. jalankan training di conda env `ai` (fallback: venv + torch cu128)
+  4. polling log (tahan disconnect), lalu scp best.pt -> weights/
 
 Contoh:
     python src/train_remote.py
@@ -30,8 +30,6 @@ from pathlib import Path
 import yaml
 
 from common import BUILD, DATASET, ROOT, RUNS, WEIGHTS, ensure_dirs, load_env
-
-LOCAL_DATA_YAML = ROOT / "data.local.yaml"
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -142,9 +140,7 @@ def build_archive(root: Path = DATASET) -> Path:
     return archive
 
 
-def write_data_yaml(remote_dataset: str, names: list[str] | str = "bottle") -> Path:
-    if isinstance(names, str):
-        names = [names]
+def write_data_yaml(remote_dataset: str, names: list[str]) -> Path:
     data = {
         "path": remote_dataset,
         "train": "images/train",
@@ -166,8 +162,8 @@ def main() -> int:
     ap.add_argument("--patience", type=int, default=30, help="0 = matikan early stopping")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--batch", default="8")
-    ap.add_argument("--model", default="yolo11n.pt")
-    ap.add_argument("--name", default="bottle")
+    ap.add_argument("--model", default="yolo11s.pt")
+    ap.add_argument("--name", default="multiclass")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--device", default="0")
     ap.add_argument(
@@ -186,9 +182,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=7200, help="timeout training (detik)")
     ap.add_argument("--force", action="store_true", help="lanjut walau disk remote sempit")
     ap.add_argument("--dataset", default=str(DATASET), help="folder dataset lokal (images/labels train+val)")
-    ap.add_argument("--class-name", default="bottle", help="nama kelas tunggal (lama)")
-    ap.add_argument("--names", default="", help="daftar kelas dipisah koma (multi-kelas)")
-    ap.add_argument("--out", default=str(WEIGHTS / "bottle_best.pt"))
+    ap.add_argument("--names", default="", help="daftar kelas dipisah koma (default: dataset/classes.txt)")
+    ap.add_argument("--out", default=str(WEIGHTS / "multiclass_best.pt"))
     args = ap.parse_args()
 
     ds = Path(args.dataset)
@@ -197,7 +192,7 @@ def main() -> int:
     elif (ds / "classes.txt").exists():
         names = [n.strip() for n in (ds / "classes.txt").read_text(encoding="utf-8").splitlines() if n.strip()]
     else:
-        names = [args.class_name]
+        raise SystemExit(f"{ds / 'classes.txt'} tidak ada; pakai --names a,b,c")
     ensure_dirs(WEIGHTS, RUNS)
 
     print(f"[1/6] cek koneksi {args.host}")
@@ -343,7 +338,6 @@ def main() -> int:
             m5095 = last.get("metrics/mAP50-95(B)", "?")
             print(f"      epochs={len(rows)} mAP50={m50} mAP50-95={m5095}")
     print(f"      weight siap: {out}")
-    print("      demo: python src/demo_yolo.py --weights " + str(out))
     return 0
 
 

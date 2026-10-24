@@ -1,12 +1,15 @@
-# data & artefak besar (ada di Hugging Face)
-dataset/
-dataset2/
-dataset3/
+# data & artefak besar (ada di repo dataset/model di GitHub)
+dataset*/
 weights/
 runs/
 build/
 pelanggaran/
 demo_output/
+ocr_captures/
+
+# bobot pretrained yang diunduh otomatis
+yolo*.pt
+data.local.yaml
 
 # output demo
 *.mp4
@@ -21,3 +24,4 @@ __pycache__/
 # env / kredensial
 .env
 .env.*
+!.env.example

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from common import CLASSES, DATASET, RAW_IMAGES, RAW_LABELS, ensure_dirs
+from common import DATASET, ensure_dirs
 
 
 def main() -> int:
@@ -31,7 +31,7 @@ def main() -> int:
     elif kelas_file.exists():
         classes = [c.strip() for c in kelas_file.read_text(encoding="utf-8").splitlines() if c.strip()]
     else:
-        classes = list(CLASSES)
+        raise SystemExit(f"{kelas_file} tidak ada; jalankan labeling dulu atau pakai --classes")
     images = sorted((raw / "images").glob("*.jpg"))
     if not images:
         print(f"[split] tidak ada gambar di {raw / 'images'}", file=sys.stderr)
@@ -83,12 +83,10 @@ def main() -> int:
     }
     (out / "classes.txt").write_text("\n".join(classes) + "\n", encoding="utf-8")
     (out / "data.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    local_yaml = out / "data.yaml" if out.name != "dataset" else out.parent / "data.local.yaml"
-    local_yaml.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
     print(f"[split] kelas={classes}")
     print(f"[split] total={len(pairs)} train={counts['train']} val={counts['val']} dilewati={skipped}")
-    print(f"[split] config: {local_yaml}")
+    print(f"[split] config: {out / 'data.yaml'}")
     return 0
 
 

@@ -1,14 +1,14 @@
 """Kasir kulkas kejujuran: deteksi minuman + verifikasi bukti bayar (realtime webcam).
 
-Alur (mirip mode "kulkas" pada project ETS):
-  1. BAYAR   : tunjukkan bukti bayar (layar HP) -> OCR nominal + kata "Berhasil"
+Alur:
+  1. BAYAR   : tunjukkan bukti bayar (layar HP) -> OCR nominal
   2. MINUMAN : tunjukkan minuman -> YOLO hitung item x harga menu
   3. HASIL   : total <= dibayar => "Terima kasih", selain itu pelanggaran (foto disimpan)
 
 Kontrol: r = reset, s = simpan transaksi manual, spasi = paksa terima nominal, q = keluar.
 
 Contoh:
-  python src/kasir_kulkas.py                       # webcam, model ETS + menu.csv
+  python src/kasir_kulkas.py                       # webcam, weights/multiclass_best.pt + menu.csv
   python src/kasir_kulkas.py --source video.mp4 --no-window --save out.mp4
   python src/kasir_kulkas.py --selftest            # uji OCR + deteksi tanpa kamera
 """
@@ -35,7 +35,6 @@ from accelerate import load_detector, tune_threads  # noqa: E402
 from md_remote import DEFAULT_URL as DEFAULT_MD_URL, MoondreamEngine  # noqa: E402
 from ocr_payment import PaddleEngine, find_amounts, preprocess  # noqa: E402
 
-ETS_DIR = ROOT.parent / "Downloads" / "ETS"
 REF_RE = re.compile(
     r"(?:ref|no\.?\s*ref|id transaksi|transaction id|no\.?\s*transaksi)[\s:.#]*([a-z0-9]{6,})",
     re.IGNORECASE,
@@ -43,27 +42,11 @@ REF_RE = re.compile(
 
 
 def default_menu() -> Path:
-    for p in (ROOT / "menu.csv", ETS_DIR / "menu.csv"):
-        if p.exists():
-            return p
     return ROOT / "menu.csv"
 
 
 def default_model() -> Path:
-    cands = [
-        ROOT / "weights" / "ets_v3_openvino_model",
-        ROOT / "weights" / "ets_v3.pt",
-        ROOT / "weights" / "ets_best_openvino_model",
-        ROOT / "weights" / "ets_best.pt",
-        ROOT / "weights" / "bottle_best_openvino_model",
-        ETS_DIR / "runs" / "detect" / "runs" / "detect" / "minuman" / "weights" / "best.pt",
-        ETS_DIR / "runs" / "detect" / "minuman" / "weights" / "best.pt",
-        ROOT / "weights" / "bottle_best.pt",
-    ]
-    for p in cands:
-        if p.exists():
-            return p
-    return ROOT / "weights" / "bottle_best.pt"
+    return ROOT / "weights" / "multiclass_best.pt"
 
 
 def load_menu(path: Path) -> dict[str, dict]:
@@ -127,7 +110,7 @@ class KasirKulkas:
         self, menu, model_path, conf, harga_default, log, folder,
         beep=True, stabil=10, imgsz=640, device="auto", det_every=1, ocr="auto",
         min_area=0.01, min_confirm=3, confirm_sec=0.35,
-        detector="yolo", md_url="", md_prompt="bottle", md_label="air_mineral",
+        detector="yolo", md_url="", md_prompt="bottle", md_label="bottle",
         md_resize=960,
     ):
         tune_threads()
@@ -528,7 +511,7 @@ def selftest(args) -> int:
     else:
         print(f"[selftest] (lewati OCR, {bukti} tidak ada)")
 
-    gambar = sorted((ETS_DIR / "dataset" / "test" / "images").glob("*.jpg"))
+    gambar = sorted((ROOT / "dataset" / "images" / "val").glob("*.jpg"))
     if gambar:
         mentah = kasir._deteksi_mentah(cv2.imread(str(gambar[0])))
         deteksi = []
@@ -578,7 +561,7 @@ def main() -> int:
     )
     ap.add_argument("--md-url", default=os.environ.get("MOONDREAM_URL", DEFAULT_MD_URL))
     ap.add_argument("--md-prompt", default="bottle", help="prompt teks untuk moondream")
-    ap.add_argument("--md-label", default="air_mineral", help="kelas menu untuk kotak moondream")
+    ap.add_argument("--md-label", default="bottle", help="kelas menu untuk kotak moondream")
     ap.add_argument("--md-resize", type=int, default=960, help="sisi maks gambar ke server")
     ap.add_argument("--no-beep", action="store_true")
     ap.add_argument("--fullscreen", action="store_true", help="tampilkan layar penuh (letterbox)")

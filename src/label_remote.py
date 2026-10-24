@@ -83,7 +83,7 @@ def pack(source: Path) -> Path:
     return archive
 
 
-def hentikan_server(host: str, server_port: int) -> None:
+def hentikan_server(host: str) -> None:
     """Matikan uvicorn moondream agar VRAM cukup untuk labeling langsung."""
     ssh(host, "pkill -f 'uvicorn moondream_server' || true", check=False)
     for _ in range(30):
@@ -163,7 +163,6 @@ def main() -> int:
         action="store_true",
         help="lompati capture/upload/label; unduh + merge hasil di remote",
     )
-    ap.add_argument("--timeout", type=int, default=3600)
     args = ap.parse_args()
 
     source = Path(args.source)
@@ -209,7 +208,7 @@ def main() -> int:
         limit = f"--limit {args.limit}" if args.limit else ""
         if not args.keep_server:
             print("[4/6] hentikan server Moondream sementara (bebaskan VRAM)")
-            hentikan_server(args.host, args.server_port)
+            hentikan_server(args.host)
         remote_cmd = (
             f"cd {job} && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True "
             f"{args.python} label_moondream.py "
