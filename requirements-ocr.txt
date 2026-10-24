@@ -1,0 +1,5 @@
+-r requirements.txt
+paddlepaddle>=3.0.0
+paddleocr>=3.0.0
+openvino>=2025.0
+winocr>=1.0.0; sys_platform == "win32"

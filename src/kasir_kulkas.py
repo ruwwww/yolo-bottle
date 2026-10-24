@@ -1,0 +1,708 @@
+"""Kasir kulkas kejujuran: deteksi minuman + verifikasi bukti bayar (realtime webcam).
+
+Alur (mirip mode "kulkas" pada project ETS):
+  1. BAYAR   : tunjukkan bukti bayar (layar HP) -> OCR nominal + kata "Berhasil"
+  2. MINUMAN : tunjukkan minuman -> YOLO hitung item x harga menu
+  3. HASIL   : total <= dibayar => "Terima kasih", selain itu pelanggaran (foto disimpan)
+
+Kontrol: r = reset, s = simpan transaksi manual, spasi = paksa terima nominal, q = keluar.
+
+Contoh:
+  python src/kasir_kulkas.py                       # webcam, model ETS + menu.csv
+  python src/kasir_kulkas.py --source video.mp4 --no-window --save out.mp4
+  python src/kasir_kulkas.py --selftest            # uji OCR + deteksi tanpa kamera
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import os
+import re
+import sys
+import threading
+import time
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from common import ROOT, fmt_rupiah, letterbox, load_env, screen_size  # noqa: E402
+from accelerate import load_detector, tune_threads  # noqa: E402
+from md_remote import DEFAULT_URL as DEFAULT_MD_URL, MoondreamEngine  # noqa: E402
+from ocr_payment import PaddleEngine, find_amounts, preprocess  # noqa: E402
+
+ETS_DIR = ROOT.parent / "Downloads" / "ETS"
+REF_RE = re.compile(
+    r"(?:ref|no\.?\s*ref|id transaksi|transaction id|no\.?\s*transaksi)[\s:.#]*([a-z0-9]{6,})",
+    re.IGNORECASE,
+)
+
+
+def default_menu() -> Path:
+    for p in (ROOT / "menu.csv", ETS_DIR / "menu.csv"):
+        if p.exists():
+            return p
+    return ROOT / "menu.csv"
+
+
+def default_model() -> Path:
+    cands = [
+        ROOT / "weights" / "ets_v3_openvino_model",
+        ROOT / "weights" / "ets_v3.pt",
+        ROOT / "weights" / "ets_best_openvino_model",
+        ROOT / "weights" / "ets_best.pt",
+        ROOT / "weights" / "bottle_best_openvino_model",
+        ETS_DIR / "runs" / "detect" / "runs" / "detect" / "minuman" / "weights" / "best.pt",
+        ETS_DIR / "runs" / "detect" / "minuman" / "weights" / "best.pt",
+        ROOT / "weights" / "bottle_best.pt",
+    ]
+    for p in cands:
+        if p.exists():
+            return p
+    return ROOT / "weights" / "bottle_best.pt"
+
+
+def load_menu(path: Path) -> dict[str, dict]:
+    menu: dict[str, dict] = {}
+    if not path.exists():
+        return menu
+    with path.open(newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            menu[row["kelas"].strip()] = {
+                "nama": row["nama"].strip(),
+                "harga": int(row["harga"]),
+            }
+    return menu
+
+
+class WinEngine:
+    """OCR bawaan Windows (WinRT). ~80 ms di CPU, tanpa model tambahan."""
+
+    def __init__(self, lang: str = "en"):
+        import asyncio
+
+        import winocr
+
+        self._asyncio = asyncio
+        self._winocr = winocr
+        self.lang = lang
+        try:
+            self.read(np.zeros((64, 64, 3), dtype=np.uint8))
+        except Exception:  # noqa: BLE001 - warmup best effort
+            pass
+
+    def read(self, image) -> list[tuple[str, float, None]]:
+        async def _go():
+            return await self._winocr.recognize_cv2(image, lang=self.lang)
+
+        res = self._asyncio.run(_go())
+        return [(line.text, 1.0, None) for line in res.lines]
+
+
+def _iou(a, b) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+    inter = iw * ih
+    if not inter:
+        return 0.0
+    area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+    area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+    return inter / max(1, area_a + area_b - inter)
+
+
+class KasirKulkas:
+    FRAME_STABIL = 10
+    TIMEOUT_MINUMAN = 60
+    DURASI_HASIL = 6
+    INTERVAL_OCR = 0.4
+
+    def __init__(
+        self, menu, model_path, conf, harga_default, log, folder,
+        beep=True, stabil=10, imgsz=640, device="auto", det_every=1, ocr="auto",
+        min_area=0.01, min_confirm=3, confirm_sec=0.35,
+        detector="yolo", md_url="", md_prompt="bottle", md_label="air_mineral",
+        md_resize=960,
+    ):
+        tune_threads()
+        self.menu = menu
+        self.detector = detector
+        self.md: MoondreamEngine | None = None
+        self.md_ms = 0.0
+        url = md_url or os.environ.get("MOONDREAM_URL", "")
+        if detector in ("auto", "moondream") and url:
+            eng = MoondreamEngine(url, prompt=md_prompt, label=md_label, resize=md_resize)
+            if eng.health():
+                self.md = eng
+            elif detector == "moondream":
+                raise SystemExit(
+                    f"[kasir] server moondream {url} tidak merespon: {eng.last_error}"
+                )
+        if self.md is not None:
+            self.model, self.device_arg = None, "http"
+            self.names = {0: md_label}
+            print(
+                f"[kasir] detektor moondream {self.md.url} "
+                f"prompt='{md_prompt}' -> {md_label}"
+            )
+        else:
+            self.model, self.device_arg = load_detector(model_path, imgsz=imgsz, device=device)
+            self.names = self.model.names if isinstance(self.model.names, dict) else {}
+            print(f"[kasir] detektor YOLO {model_path} ({len(self.names)} kelas)")
+        self.imgsz = imgsz
+        self.det_every = max(1, det_every)
+        self.min_area = max(0.0, min_area)
+        self.min_confirm = max(1, min_confirm)
+        self.confirm_sec = max(0.0, confirm_sec)
+        self._tick = 0
+        self._cache = []
+        self.tracks: list[dict] = []
+        self.kandidat: list[tuple[int, int, int, int]] = []
+        self.fps = 0.0
+        self.conf = conf
+        self.harga_default = harga_default
+        self.log = Path(log)
+        self.folder = Path(folder)
+        self.folder.mkdir(parents=True, exist_ok=True)
+        self.beep = beep
+        self.FRAME_STABIL = max(3, stabil)
+        print(f"[kasir] menu {len(menu)} item")
+
+        self.ocr_backend = ocr
+        self.engine: object | None = None
+        self.ocr_name = "-"
+        self._engine_lock = threading.Lock()
+        self._ocr_thread: threading.Thread | None = None
+        self._ocr_result: dict | None = None
+        self._ocr_last = 0.0
+        self.last_amount: int | None = None
+        self.reset()
+
+    # ---------------- util ----------------
+    def reset(self, pesan=""):
+        self.state = "BAYAR"
+        self.dibayar = 0
+        self.ref = "-"
+        self.t_state = time.time()
+        self.riwayat: list[Counter] = []
+        self.pesan = pesan
+        self.pesan2 = ""
+        self.warna: tuple[int, int, int] = (255, 255, 255)
+        self.pelanggaran = False
+        self.tracks = []
+        self.kandidat = []
+        self._cache = []
+        self._tick = 0
+
+    def _bunyi(self):
+        if not self.beep:
+            return
+
+        def _b():
+            try:
+                import winsound
+
+                for _ in range(2):
+                    winsound.Beep(1300, 250)
+            except Exception:
+                print("\a", end="", flush=True)
+
+        threading.Thread(target=_b, daemon=True).start()
+
+    def _catat(self, minuman: str, total: int, status: str, foto: str = ""):
+        baru = not self.log.exists()
+        with self.log.open("a", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            if baru:
+                w.writerow(
+                    ["waktu", "referensi", "dibayar", "minuman", "harga_minuman", "status", "foto"]
+                )
+            w.writerow(
+                [
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    self.ref,
+                    self.dibayar,
+                    minuman,
+                    total,
+                    status,
+                    foto,
+                ]
+            )
+
+    def _ocr(self, frame):
+        try:
+            self._ocr_result = self._baca_bukti(frame)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[kasir] OCR error: {exc}")
+            self._ocr_result = {}
+
+    def preload_ocr(self):
+        with self._engine_lock:
+            if self.engine is not None:
+                return
+            if self.ocr_backend in ("auto", "winocr"):
+                try:
+                    self.engine, self.ocr_name = WinEngine("en"), "winocr"
+                except Exception as exc:  # noqa: BLE001
+                    if self.ocr_backend == "winocr":
+                        raise
+                    print(f"[kasir] winocr tidak tersedia ({exc}); pakai PaddleOCR")
+            if self.engine is None:
+                self.engine, self.ocr_name = PaddleEngine(lang="en"), "paddle"
+            self.INTERVAL_OCR = 0.4 if self.ocr_name == "winocr" else 1.2
+            print(f"[kasir] OCR: {self.ocr_name} (interval {self.INTERVAL_OCR}s)")
+
+    def _baca_bukti(self, frame) -> dict:
+        if self.engine is None:
+            self.preload_ocr()
+        name = self.ocr_name
+        h, w = frame.shape[:2]
+        if w > 800:
+            frame = cv2.resize(frame, (800, int(h * 800 / w)), interpolation=cv2.INTER_AREA)
+        if name == "winocr":
+            items = self.engine.read(frame)  # type: ignore[union-attr]
+        else:
+            proc, _ = preprocess(frame, "clahe")
+            items = self.engine.read(proc)  # type: ignore[union-attr]
+        texts = [t for t, s, _ in items]
+        jumlah = find_amounts(texts)
+        nominal = max(jumlah) if jumlah else None
+        status = "BERHASIL" if nominal else "TIDAK DIKETAHUI"
+        ref = REF_RE.search(" ".join(texts))
+        return {
+            "jumlah": nominal,
+            "status": status,
+            "referensi": ref.group(1).upper() if ref else "-",
+            "teks": " | ".join(texts),
+        }
+
+    def _deteksi_mentah(self, frame) -> list[tuple[int, int, int, int, float, int]]:
+        """Deteksi + filter geometri (area/aspect) sebelum tracking."""
+        mentah: list[tuple[float, float, float, float, float, int]] = []
+        if self.md is not None:
+            mentah = self.md.detect(frame)  # type: ignore[assignment]
+            self.md_ms = self.md.last_ms
+        else:
+            res = self.model.predict(  # type: ignore[union-attr]
+                frame,
+                conf=self.conf,
+                imgsz=self.imgsz,
+                device=self.device_arg,
+                max_det=30,
+                verbose=False,
+            )[0]
+            for box in res.boxes:
+                x1, y1, x2, y2 = map(float, box.xyxy[0])
+                mentah.append((x1, y1, x2, y2, float(box.conf[0]), int(box.cls[0])))
+        h, w = frame.shape[:2]
+        hasil = []
+        for x1, y1, x2, y2, conf, cls_id in mentah:
+            bw, bh = (x2 - x1) / w, (y2 - y1) / h
+            area = bw * bh
+            ar = bw / max(bh, 1e-6)
+            if area < self.min_area or area > 0.85 or not 0.08 <= ar <= 6.0:
+                continue
+            hasil.append((int(x1), int(y1), int(x2), int(y2), float(conf), int(cls_id)))
+        return hasil
+
+    def _update_tracks(self, mentah):
+        """Hanya objek yang bertahan (IoU antar frame) yang dianggap nyata."""
+        now = time.time()
+        lama = len(self.tracks)
+        dipakai = [False] * lama
+        self.kandidat = []
+        for x1, y1, x2, y2, conf, cls_id in mentah:
+            idx, iou_max = -1, 0.3
+            for i in range(lama):
+                tr = self.tracks[i]
+                if dipakai[i] or tr["cls"] != cls_id:
+                    continue
+                iou = _iou(tr["box"], (x1, y1, x2, y2))
+                if iou > iou_max:
+                    idx, iou_max = i, iou
+            if idx >= 0:
+                dipakai[idx] = True
+                tr = self.tracks[idx]
+                tr.update(box=(x1, y1, x2, y2), conf=conf, hits=tr["hits"] + 1, last=now)
+            else:
+                self.tracks.append(
+                    {"box": (x1, y1, x2, y2), "conf": conf, "cls": cls_id,
+                     "hits": 1, "first": now, "last": now, "ok": False}
+                )
+        self.tracks = [t for t in self.tracks if now - t["last"] <= 0.8]
+        for tr in self.tracks:
+            tr["ok"] = (
+                tr["hits"] >= self.min_confirm
+                and (now - tr["first"]) >= self.confirm_sec
+            )
+            if not tr["ok"]:
+                self.kandidat.append(tr["box"])
+
+    def _deteksi(self, frame):
+        self._tick += 1
+        if self._cache and self.det_every > 1 and self._tick % self.det_every:
+            return self._cache
+        self._update_tracks(self._deteksi_mentah(frame))
+        deteksi = []
+        for tr in self.tracks:
+            if not tr["ok"]:
+                continue
+            kelas = self.names.get(tr["cls"], str(tr["cls"]))
+            info = self.menu.get(kelas, {"nama": kelas, "harga": self.harga_default})
+            deteksi.append((kelas, info["nama"], info["harga"], tr["conf"], tr["box"]))
+            if len(deteksi) >= 20:
+                break
+        self._cache = deteksi
+        return deteksi
+
+    # ---------------- state ----------------
+    def _tahap_bayar(self, frame):
+        sibuk = self._ocr_thread is not None and self._ocr_thread.is_alive()
+        if not sibuk and self._ocr_result is not None:
+            data, self._ocr_result = self._ocr_result, None
+            jumlah = data.get("jumlah")
+            self.last_amount = jumlah or self.last_amount
+            if jumlah:
+                self.dibayar = jumlah
+                self.ref = data.get("referensi", "-")
+                self.state, self.t_state = "MINUMAN", time.time()
+                self.pesan = f"Pembayaran {fmt_rupiah(self.dibayar)} diterima"
+                self.pesan2 = "Tunjukkan minuman ke kamera"
+                self.warna = (0, 255, 0)
+                print(f"[kasir] bayar {fmt_rupiah(self.dibayar)} ref={self.ref}")
+            else:
+                self.pesan = "Nominal pembayaran belum terbaca"
+                self.pesan2 = "Dekatkan HP / tekan spasi untuk paksa terima"
+                self.warna = (0, 255, 255)
+        elif not sibuk and time.time() - self._ocr_last > self.INTERVAL_OCR:
+            self._ocr_last = time.time()
+            self._ocr_thread = threading.Thread(target=self._ocr, args=(frame.copy(),), daemon=True)
+            self._ocr_thread.start()
+
+    def _tahap_minuman(self, frame):
+        deteksi = self._deteksi(frame)
+        total = sum(d[2] for d in deteksi)
+        hitung = Counter(d[0] for d in deteksi)
+        self.riwayat = (self.riwayat + [hitung])[-self.FRAME_STABIL:]
+        stabil, pasti = self._stabil()
+        if stabil:
+            self._evaluasi(frame, pasti)
+        elif time.time() - self.t_state > self.TIMEOUT_MINUMAN:
+            self._catat("-", 0, "TIMEOUT")
+            self.reset("Waktu habis, minuman tidak ditunjukkan")
+        return deteksi, total
+
+    def _stabil(self) -> tuple[bool, Counter]:
+        """Suara mayoritas: kelas sama & jumlah tiap kelas tidak goyah >1 tiap frame."""
+        if len(self.riwayat) < self.FRAME_STABIL or not self.riwayat[-1]:
+            return False, Counter()
+        kelas = set(self.riwayat[-1])
+        if any(set(r) != kelas for r in self.riwayat):
+            return False, Counter()
+        pasti = Counter()
+        for k in kelas:
+            nilai = sorted(r[k] for r in self.riwayat)
+            median = nilai[len(nilai) // 2]
+            if all(abs(r[k] - median) <= 1 for r in self.riwayat):
+                pasti[k] = median
+            else:
+                return False, Counter()
+        return bool(pasti), pasti
+
+    def _evaluasi(self, frame, hitung: Counter):
+        rincian = []
+        total = 0
+        for kelas, n in hitung.items():
+            info = self.menu.get(kelas, {"nama": kelas, "harga": self.harga_default})
+            rincian.append((info["nama"], n))
+            total += info["harga"] * n
+        daftar = ", ".join(f"{n}x {nama}" for nama, n in rincian)
+        self.state, self.t_state = "HASIL", time.time()
+        if total > self.dibayar:
+            self.pelanggaran = True
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            foto = self.folder / f"{ts}_full.jpg"
+            cv2.imwrite(str(foto), frame)
+            self.pesan = f"PERINGATAN! Minuman {fmt_rupiah(total)} > dibayar {fmt_rupiah(self.dibayar)}"
+            self.pesan2 = f"Kurang {fmt_rupiah(total - self.dibayar)} - foto disimpan"
+            self.warna = (0, 0, 255)
+            self._bunyi()
+            print(f"[kasir] PELANGGARAN {daftar} total={fmt_rupiah(total)} -> {foto}")
+            self._catat(daftar, total, "PELANGGARAN", str(foto))
+        else:
+            lebih = self.dibayar - total
+            self.pesan = f"Terima kasih! {daftar}"
+            self.pesan2 = f"Lebih bayar {fmt_rupiah(lebih)}" if lebih else "Pembayaran pas"
+            self.warna = (0, 255, 0)
+            print(f"[kasir] OK {daftar} total={fmt_rupiah(total)}")
+            self._catat(daftar, total, "OK")
+
+    def _gambar(self, frame, deteksi, total):
+        tampil = frame.copy()
+        for x1, y1, x2, y2 in self.kandidat:
+            cv2.rectangle(tampil, (x1, y1), (x2, y2), (130, 130, 130), 1)
+        for _, nama, harga, conf, (x1, y1, x2, y2) in deteksi:
+            cv2.rectangle(tampil, (x1, y1), (x2, y2), (0, 220, 90), 2)
+            cv2.putText(
+                tampil,
+                f"{nama} {fmt_rupiah(harga)} {conf:.2f}",
+                (x1, max(18, y1 - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 220, 90),
+                2,
+                cv2.LINE_AA,
+            )
+
+        h, w = tampil.shape[:2]
+        cv2.rectangle(tampil, (0, 0), (w, 78), (20, 20, 20), -1)
+        if self.state == "BAYAR":
+            judul = "1. Tunjukkan BUKTI BAYAR (layar HP) ke kamera"
+            sub = self.pesan or "scan QRIS lalu tunjukkan struk"
+            if self.engine is None:
+                sub = "OCR menyiapkan... " + sub
+        elif self.state == "MINUMAN":
+            judul = f"2. Dibayar {fmt_rupiah(self.dibayar)} - tunjukkan MINUMAN"
+            sub = "tahan sampai terbaca stabil"
+            if self.kandidat and not deteksi:
+                sub = f"{len(self.kandidat)} kandidat, menunggu konfirmasi..."
+        else:
+            judul = self.pesan
+            sub = self.pesan2
+        cv2.putText(tampil, judul[:80], (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+                    self.warna if self.state == "HASIL" else (255, 255, 255), 2)
+        cv2.putText(tampil, sub[:90], (10, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.55, self.warna, 1)
+        cv2.putText(
+            tampil, f"{self.fps:4.1f} FPS", (w - 120, 30),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 235, 255), 2,
+        )
+        if self.md is not None:
+            cv2.putText(
+                tampil, f"MD {self.md_ms:3.0f}ms", (w - 120, 52),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 255), 1,
+            )
+
+        cv2.rectangle(tampil, (0, h - 58), (w, h), (20, 20, 20), -1)
+        kiri = f"Total: {fmt_rupiah(total)}"
+        kanan = f"Dibayar: {fmt_rupiah(self.dibayar) if self.dibayar else '-'}   ref {self.ref}"
+        cv2.putText(tampil, kiri, (10, h - 34), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 235, 255), 2)
+        cv2.putText(tampil, kanan, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (200, 200, 200), 1)
+        cv2.putText(tampil, "r=reset  spasi=paksa  s=simpan  q=keluar", (w - 330, h - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (140, 140, 140), 1)
+        if self.pelanggaran and int(time.time() * 4) % 2:
+            cv2.rectangle(tampil, (0, 0), (w - 1, h - 1), (0, 0, 255), 18)
+        return tampil
+
+    def step(self, frame):
+        deteksi, total = [], 0
+        if self.state == "BAYAR":
+            self._tahap_bayar(frame)
+        elif self.state == "MINUMAN":
+            deteksi, total = self._tahap_minuman(frame)
+        else:
+            if time.time() - self.t_state > self.DURASI_HASIL:
+                self.reset()
+        return deteksi, total
+
+
+def selftest(args) -> int:
+    menu = load_menu(Path(args.menu))
+    model_path = Path(args.model)
+    print(f"[selftest] model  : {model_path}")
+    print(f"[selftest] menu   : {Path(args.menu)} ({len(menu)} item)")
+    kasir = KasirKulkas(menu, model_path, args.conf, args.harga_default, args.log, args.folder, beep=False)
+
+    bukti = ROOT / "build" / "ocr_selftest.png"
+    if bukti.exists():
+        data = kasir._baca_bukti(cv2.imread(str(bukti)))
+        print(f"[selftest] OCR    : {data['status']} {fmt_rupiah(data['jumlah'] or 0)} | {data['teks'][:70]}")
+        if data["status"] != "BERHASIL" or data["jumlah"] != 250000:
+            print("[selftest] GAGAL: OCR tidak sesuai (harus BERHASIL Rp 250.000)")
+            return 1
+    else:
+        print(f"[selftest] (lewati OCR, {bukti} tidak ada)")
+
+    gambar = sorted((ETS_DIR / "dataset" / "test" / "images").glob("*.jpg"))
+    if gambar:
+        mentah = kasir._deteksi_mentah(cv2.imread(str(gambar[0])))
+        deteksi = []
+        for x1, y1, x2, y2, conf, cls_id in mentah:
+            kelas = kasir.names.get(cls_id, str(cls_id))
+            info = kasir.menu.get(kelas, {"nama": kelas, "harga": kasir.harga_default})
+            deteksi.append((kelas, info["nama"], info["harga"], conf, (x1, y1, x2, y2)))
+        total = sum(d[2] for d in deteksi)
+        print(f"[selftest] deteksi: {len(deteksi)} objek, total {fmt_rupiah(total)}")
+        if not deteksi:
+            print("[selftest] GAGAL: model tidak mendeteksi apa pun")
+            return 1
+    print("[selftest] OK")
+    return 0
+
+
+def main() -> int:
+    load_env()
+    ap = argparse.ArgumentParser(description="Kasir kulkas: deteksi minuman + verifikasi bayar")
+    ap.add_argument("--source", default="0", help="index webcam atau path video")
+    ap.add_argument("--model", default=str(default_model()))
+    ap.add_argument("--menu", default=str(default_menu()))
+    ap.add_argument("--conf", type=float, default=0.45)
+    ap.add_argument("--harga-default", type=int, default=5000)
+    ap.add_argument("--log", default="transaksi.csv")
+    ap.add_argument("--folder", default="pelanggaran")
+    ap.add_argument("--pay-image", default="", help="lewati tahap BAYAR dengan gambar struk")
+    ap.add_argument("--save", default="", help="rekam tampilan ke .mp4")
+    ap.add_argument("--max-frames", type=int, default=0)
+    ap.add_argument("--no-window", action="store_true")
+    ap.add_argument("--stabil", type=int, default=10, help="jumlah frame stabil sebelum menilai")
+    ap.add_argument("--imgsz", type=int, default=640, help="ukuran inference YOLO")
+    ap.add_argument(
+        "--device", default="auto",
+        help="auto (OpenVINO GPU) | intel:gpu | intel:cpu | cpu | cuda",
+    )
+    ap.add_argument("--det-every", type=int, default=1, help="deteksi tiap N frame (>1 hemat CPU)")
+    ap.add_argument("--ocr", default="auto", choices=["auto", "winocr", "paddle"])
+    ap.add_argument("--min-area", type=float, default=0.01, help="area kotak minimum (fraksi frame)")
+    ap.add_argument("--min-confirm", type=int, default=3, help="minimal kemunculan sebelum dihitung")
+    ap.add_argument("--confirm-sec", type=float, default=0.35, help="lama objek harus bertahan (detik)")
+    ap.add_argument("--cam-width", type=int, default=960)
+    ap.add_argument("--cam-height", type=int, default=540)
+    ap.add_argument(
+        "--detector", default="auto", choices=["auto", "moondream", "yolo"],
+        help="auto: moondream kalau server hidup, kalau tidak YOLO lokal",
+    )
+    ap.add_argument("--md-url", default=os.environ.get("MOONDREAM_URL", DEFAULT_MD_URL))
+    ap.add_argument("--md-prompt", default="bottle", help="prompt teks untuk moondream")
+    ap.add_argument("--md-label", default="air_mineral", help="kelas menu untuk kotak moondream")
+    ap.add_argument("--md-resize", type=int, default=960, help="sisi maks gambar ke server")
+    ap.add_argument("--no-beep", action="store_true")
+    ap.add_argument("--fullscreen", action="store_true", help="tampilkan layar penuh (letterbox)")
+    ap.add_argument("--selftest", action="store_true")
+    args = ap.parse_args()
+
+    if args.selftest:
+        return selftest(args)
+
+    menu = load_menu(Path(args.menu))
+    if not menu:
+        print(f"[kasir] menu '{args.menu}' kosong/tidak ada; semua item pakai harga default")
+    kasir = KasirKulkas(
+        menu, Path(args.model), args.conf, args.harga_default, args.log, args.folder,
+        beep=not args.no_beep,
+        stabil=args.stabil,
+        imgsz=args.imgsz,
+        device=args.device,
+        det_every=args.det_every,
+        ocr=args.ocr,
+        min_area=args.min_area,
+        min_confirm=args.min_confirm,
+        confirm_sec=args.confirm_sec,
+        detector=args.detector,
+        md_url=args.md_url,
+        md_prompt=args.md_prompt,
+        md_label=args.md_label,
+        md_resize=args.md_resize,
+    )
+    threading.Thread(target=kasir.preload_ocr, daemon=True, name="preload-ocr").start()
+
+    if args.pay_image:
+        img = cv2.imread(args.pay_image)
+        if img is None:
+            raise SystemExit(f"gambar bukti '{args.pay_image}' tidak terbaca")
+        data = kasir._baca_bukti(img)
+        print(f"[kasir] bukti: {data['status']} {fmt_rupiah(data['jumlah'] or 0)} | {data['teks'][:80]}")
+        if data["jumlah"]:
+            kasir.dibayar, kasir.ref = data["jumlah"], data["referensi"]
+            kasir.state, kasir.t_state = "MINUMAN", time.time()
+            print(f"[kasir] lanjut ke MINUMAN, dibayar {fmt_rupiah(kasir.dibayar)}")
+
+    source = int(args.source) if str(args.source).isdigit() else args.source
+    cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        raise SystemExit(f"sumber '{args.source}' tidak bisa dibuka")
+    if isinstance(source, int):
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.cam_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.cam_height)
+        cap.set(cv2.CAP_PROP_FPS, 30)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    disp = None
+    if args.fullscreen and not args.no_window:
+        disp = screen_size()
+        cv2.namedWindow("Kasir Kulkas", cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty("Kasir Kulkas", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        print(f"[kasir] fullscreen {disp[0]}x{disp[1]}")
+
+    writer = None
+    if args.save:
+        Path(args.save).parent.mkdir(parents=True, exist_ok=True)
+        out_size = disp if disp else (
+            int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280,
+            int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720,
+        )
+        writer = cv2.VideoWriter(
+            args.save, cv2.VideoWriter_fourcc(*"mp4v"),
+            cap.get(cv2.CAP_PROP_FPS) or 25, out_size,
+        )
+
+    print("[kasir] jalan. r=reset spasi=paksa s=simpan q=keluar")
+    n = 0
+    last_det, last_total = [], 0
+    t_prev = time.perf_counter()
+    t_loop = t_prev
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        now = time.perf_counter()
+        if now > t_prev:
+            inst = 1.0 / (now - t_prev)
+            kasir.fps = inst if kasir.fps == 0 else 0.85 * kasir.fps + 0.15 * inst
+        t_prev = now
+        deteksi, total = kasir.step(frame)
+        if deteksi or kasir.state != "BAYAR":
+            last_det, last_total = deteksi, total
+        tampil = kasir._gambar(frame, deteksi, total)
+        if disp:
+            tampil = letterbox(tampil, disp)
+        if writer is not None:
+            writer.write(tampil)
+        if not args.no_window:
+            cv2.imshow("Kasir Kulkas", tampil)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
+            break
+        if key == ord("r"):
+            kasir.reset("Direset manual")
+        elif key == ord(" ") and kasir.state == "BAYAR" and kasir.last_amount:
+            kasir.dibayar = kasir.last_amount
+            kasir.state, kasir.t_state = "MINUMAN", time.time()
+            kasir.pesan = f"Dipaksa terima {fmt_rupiah(kasir.dibayar)}"
+            print(f"[kasir] paksa terima {fmt_rupiah(kasir.dibayar)}")
+        elif key == ord("s"):
+            daftar = ", ".join(f"{d[1]}" for d in last_det) or "-"
+            kasir._catat(daftar, last_total, "MANUAL", "")
+            kasir.pesan, kasir.warna = "Transaksi disimpan", (0, 255, 255)
+            print(f"[kasir] simpan manual total={fmt_rupiah(last_total)}")
+        n += 1
+        if args.max_frames and n >= args.max_frames:
+            break
+
+    cap.release()
+    if writer is not None:
+        writer.release()
+    if not args.no_window:
+        cv2.destroyAllWindows()
+    dur = time.perf_counter() - t_loop
+    fps = n / dur if dur > 0 else 0
+    print(f"[kasir] selesai. {n} frame dalam {dur:.1f}s ({fps:.1f} fps loop), log: {args.log}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

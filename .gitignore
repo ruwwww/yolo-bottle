@@ -1,0 +1,23 @@
+# data & artefak besar (ada di Hugging Face)
+dataset/
+dataset2/
+dataset3/
+weights/
+runs/
+build/
+pelanggaran/
+demo_output/
+
+# output demo
+*.mp4
+transaksi.csv
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# env / kredensial
+.env
+.env.*
