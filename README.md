@@ -3,6 +3,12 @@
 Pipeline deteksi botol: auto-labeling dari webcam → training di server GPU via SSH →
 demo weight hasil training + demo OCR nominal pembayaran (`Rp X.XXX`) dari layar HP.
 
+**Artefak:**
+
+- Kode (repo ini): https://github.com/ruwwww/yolo-bottle
+- Dataset 3 kelas (446 train / 112 val + `data.yaml`): https://github.com/ruwwww/yolo-bottle-dataset
+- Weight `multiclass_best.pt` (YOLO11s, mAP50 0.748): https://github.com/ruwwww/yolo-bottle-model
+
 ```
 src/autolabel.py     webcam + detector COCO pretrained (bottle) -> gambar + label YOLO (maks 50)
 src/split_dataset.py split raw -> dataset/images|labels/{train,val} + data.local.yaml
