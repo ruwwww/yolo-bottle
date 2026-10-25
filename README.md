@@ -1,7 +1,8 @@
 # yolo-bottle
 
-Kasir kulkas kejujuran realtime: verifikasi bukti bayar (OCR nominal `Rp ...`),
-deteksi barang (YOLO/OpenVINO), lalu putuskan OK atau pelanggaran.
+Kasir kulkas kejujuran realtime: deteksi barang dulu (YOLO/OpenVINO), lalu
+verifikasi bukti bayar (OCR nominal `Rp ...`), lalu putuskan OK atau pelanggaran
+(pelanggaran bisa dikirim otomatis ke Telegram bot).
 
 Pipeline dataset dipisah tiga tahap: **capture di laptop** (tanpa model) →
 **labeling di server GPU pakai Moondream** (VLM) → **training di GPU**.
@@ -19,7 +20,8 @@ src/collect_dataset.py   capture frame webcam per kelas (tanpa label, 30 fps)
 src/label_remote.py      upload capture -> label Moondream di GPU -> unduh label
 src/split_dataset.py     dataset/raw -> dataset/images|labels/{train,val} + data.yaml
 src/train_remote.py      pack + upload dataset -> train di GPU -> tarik best.pt
-src/kasir_kulkas.py      aplikasi kasir realtime (3 tahap: BAYAR, MINUMAN, HASIL)
+src/kasir_kulkas.py      aplikasi kasir realtime (3 tahap: MINUMAN, BAYAR, HASIL)
+src/telegram_notify.py   kirim notifikasi pelanggaran ke Telegram bot (stdlib)
 src/accelerate.py        OpenVINO iGPU (auto-export + cache) & tuning thread
 src/ocr_payment.py       parser nominal Rp + engine OCR (winocr / PaddleOCR)
 src/md_remote.py         klien HTTP server Moondream (deteksi realtime)
@@ -55,6 +57,8 @@ Copy-Item .env.example .env
 # YOLO_REMOTE_DIR=yolo-bottle
 # YOLO_PYTHON=$HOME/.conda/envs/ai/bin/python
 # MOONDREAM_URL=http://<host>:8090
+# TELEGRAM_BOT_TOKEN=123456:ABC...
+# TELEGRAM_CHAT_ID=123456789
 ```
 
 ## 1. Capture dataset
@@ -124,14 +128,16 @@ Opsi: `--host`, `--names`, `--epochs`, `--patience` (`0` = tanpa early stop),
 
 Alur 3 tahap:
 
-1. **BAYAR** — tunjukkan bukti bayar (layar HP). OCR jalan tiap ~0,4 s di thread
+1. **MINUMAN** — tunjukkan barang dulu. YOLO menghitung per kelas × harga
+   `menu.csv`; objek harus ter-track ≥ 0,35 s **dan** stabil 10 frame (mayoritas)
+   supaya false positive tidak ikut dihitung. Total dikunci setelah stabil.
+2. **BAYAR** — tunjukkan bukti bayar (layar HP). OCR jalan tiap ~0,4 s di thread
    terpisah dan mencari nominal `Rp ...` (tanpa perlu kata "Berhasil"). Belum
    kebaca? Tekan `spasi` untuk paksa terima nominal terakhir.
-2. **MINUMAN** — tunjukkan barang. YOLO menghitung per kelas × harga `menu.csv`;
-   objek harus ter-track ≥ 0,35 s **dan** stabil 10 frame (mayoritas) supaya
-   false positive tidak ikut dihitung.
 3. **HASIL** — total ≤ dibayar → "Terima kasih"; lebih → layar merah + foto
-   disimpan di `pelanggaran/` + bunyi. Semua tercatat di `transaksi.csv`.
+   disimpan di `pelanggaran/` + bunyi + notifikasi Telegram. Bukti bayar yang
+   tidak ditunjukkan sampai batas waktu juga dihitung pelanggaran. Semua
+   tercatat di `transaksi.csv`.
 
 Isi `menu.csv` (nama kelas harus sama dengan `classes.txt`):
 
@@ -154,6 +160,20 @@ Kontrol: `r` reset, `s` simpan manual, `q` keluar. Opsi penting: `--conf`,
 `--imgsz`, `--det-every`, `--ocr auto|winocr|paddle`, `--min-area`,
 `--min-confirm`, `--confirm-sec`, `--fullscreen`, `--save`.
 
+### Notifikasi pelanggaran ke Telegram
+
+Buat bot lewat `@BotFather`, isi `TELEGRAM_BOT_TOKEN` dan `TELEGRAM_CHAT_ID` di
+`.env` (chat id bisa dilihat dari `getUpdates`), lalu jalankan seperti biasa.
+Saat pelanggaran, foto minuman + foto bukti bayar dikirim ke chat tersebut
+beserta total, nominal dibayar, kekurangan, dan referensi transaksi.
+
+```powershell
+.venv\Scripts\python.exe src\kasir_kulkas.py --telegram-test
+```
+
+Matikan dengan `--no-telegram`; override cepat lewat `--telegram-token` /
+`--telegram-chat`.
+
 ## Backend Moondream (opsional, deteksi realtime)
 
 Moondream juga bisa dipakai sebagai detektor realtime lewat HTTP (prompt teks →
@@ -171,12 +191,12 @@ satu kelas menu (default `bottle`).
 
 ## Optimasi untuk laptop ini (Intel Iris Xe, tanpa CUDA)
 
-| Bagian | Sebelum | Sesudah |
-|---|---|---|
-| YOLO (yolo11s, 640) | torch CPU 148 ms (6.8 FPS) | OpenVINO **iGPU ~16-20 ms (50+ FPS)** |
-| Loop kamera | **1.9 FPS** | **45-58 FPS** |
-| OCR bukti bayar | PaddleOCR 3.x **47 s** (mkldnn rusak) | Windows OCR **~80 ms** |
-| Waktu deteksi ke-1 | full kompilasi GPU ~18 s | cache GPU `build/ov_cache` |
+| Bagian              | Sebelum                               | Sesudah                               |
+| ------------------- | ------------------------------------- | ------------------------------------- |
+| YOLO (yolo11s, 640) | torch CPU 148 ms (6.8 FPS)            | OpenVINO **iGPU ~16-20 ms (50+ FPS)** |
+| Loop kamera         | **1.9 FPS**                           | **45-58 FPS**                         |
+| OCR bukti bayar     | PaddleOCR 3.x **47 s** (mkldnn rusak) | Windows OCR **~80 ms**                |
+| Waktu deteksi ke-1  | full kompilasi GPU ~18 s              | cache GPU `build/ov_cache`            |
 
 - `src/accelerate.py` mengekspor model ke OpenVINO **sekali** (`*_openvino_model/`)
   lalu jalan di iGPU (`device='intel:GPU'`), cache kernel di `build/ov_cache`.
@@ -211,12 +231,3 @@ satu kelas menu (default `bottle`).
   ballpoint_box `0.83/0.28` → kotak pensil masih lemah (banyak frame dilabeli
   negatif; perbaiki prompt `pen box` lalu label ulang).
 - Demo kasir 3 kelas: `transaksi.csv` bersih (3.000 / 15.000 / 50.000), semua `OK`.
-
-## Lab (tool lama)
-
-Tool eksperimen/legacy (COCO autolabel, demo YOLO mandiri, fetch weight, skrip
-eval) tidak dipakai pipeline ini dan dipisah ke branch **`lab`**:
-
-```powershell
-git switch lab
-```

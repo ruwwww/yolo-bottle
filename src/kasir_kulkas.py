@@ -1,9 +1,10 @@
 """Kasir kulkas kejujuran: deteksi minuman + verifikasi bukti bayar (realtime webcam).
 
 Alur:
-  1. BAYAR   : tunjukkan bukti bayar (layar HP) -> OCR nominal
-  2. MINUMAN : tunjukkan minuman -> YOLO hitung item x harga menu
-  3. HASIL   : total <= dibayar => "Terima kasih", selain itu pelanggaran (foto disimpan)
+  1. MINUMAN : tunjukkan minuman -> YOLO hitung item x harga menu
+  2. BAYAR   : tunjukkan bukti bayar (layar HP) -> OCR nominal
+  3. HASIL   : total <= dibayar => "Terima kasih", selain itu pelanggaran
+               (foto disimpan + notifikasi Telegram kalau dikonfigurasi)
 
 Kontrol: r = reset, s = simpan transaksi manual, spasi = paksa terima nominal, q = keluar.
 
@@ -34,6 +35,7 @@ from common import ROOT, fmt_rupiah, letterbox, load_env, screen_size  # noqa: E
 from accelerate import load_detector, tune_threads  # noqa: E402
 from md_remote import DEFAULT_URL as DEFAULT_MD_URL, MoondreamEngine  # noqa: E402
 from ocr_payment import PaddleEngine, find_amounts, preprocess  # noqa: E402
+from telegram_notify import TelegramBot  # noqa: E402
 
 REF_RE = re.compile(
     r"(?:ref|no\.?\s*ref|id transaksi|transaction id|no\.?\s*transaksi)[\s:.#]*([a-z0-9]{6,})",
@@ -103,6 +105,7 @@ def _iou(a, b) -> float:
 class KasirKulkas:
     FRAME_STABIL = 10
     TIMEOUT_MINUMAN = 60
+    TIMEOUT_BAYAR = 60
     DURASI_HASIL = 6
     INTERVAL_OCR = 0.4
 
@@ -111,7 +114,7 @@ class KasirKulkas:
         beep=True, stabil=10, imgsz=640, device="auto", det_every=1, ocr="auto",
         min_area=0.01, min_confirm=3, confirm_sec=0.35,
         detector="yolo", md_url="", md_prompt="bottle", md_label="bottle",
-        md_resize=960,
+        md_resize=960, telegram=True, telegram_token="", telegram_chat="",
     ):
         tune_threads()
         self.menu = menu
@@ -155,6 +158,14 @@ class KasirKulkas:
         self.folder.mkdir(parents=True, exist_ok=True)
         self.beep = beep
         self.FRAME_STABIL = max(3, stabil)
+        self.telegram = TelegramBot(telegram_token, telegram_chat) if telegram else None
+        if self.telegram is not None and self.telegram.enabled:
+            print("[kasir] notifikasi pelanggaran -> Telegram aktif")
+        elif self.telegram is not None:
+            print(
+                "[kasir] telegram belum dikonfigurasi "
+                "(set TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID)"
+            )
         print(f"[kasir] menu {len(menu)} item")
 
         self.ocr_backend = ocr
@@ -164,16 +175,20 @@ class KasirKulkas:
         self._ocr_thread: threading.Thread | None = None
         self._ocr_result: dict | None = None
         self._ocr_last = 0.0
+        self._ocr_gen = 0
         self.last_amount: int | None = None
         self.reset()
 
     # ---------------- util ----------------
     def reset(self, pesan=""):
-        self.state = "BAYAR"
+        self.state = "MINUMAN"
         self.dibayar = 0
         self.ref = "-"
         self.t_state = time.time()
         self.riwayat: list[Counter] = []
+        self.hitung: Counter = Counter()
+        self.total_minuman = 0
+        self.frame_minuman = None
         self.pesan = pesan
         self.pesan2 = ""
         self.warna: tuple[int, int, int] = (255, 255, 255)
@@ -182,6 +197,9 @@ class KasirKulkas:
         self.kandidat = []
         self._cache = []
         self._tick = 0
+        self._ocr_result = None
+        self._ocr_last = 0.0
+        self._ocr_gen += 1
 
     def _bunyi(self):
         if not self.beep:
@@ -218,12 +236,14 @@ class KasirKulkas:
                 ]
             )
 
-    def _ocr(self, frame):
+    def _ocr(self, frame, gen):
         try:
-            self._ocr_result = self._baca_bukti(frame)
+            data = self._baca_bukti(frame)
         except Exception as exc:  # noqa: BLE001
             print(f"[kasir] OCR error: {exc}")
-            self._ocr_result = {}
+            data = {}
+        if gen == self._ocr_gen:
+            self._ocr_result = data
 
     def preload_ocr(self):
         with self._engine_lock:
@@ -345,7 +365,36 @@ class KasirKulkas:
         return deteksi
 
     # ---------------- state ----------------
+    def _tahap_minuman(self, frame):
+        deteksi = self._deteksi(frame)
+        total = sum(d[2] for d in deteksi)
+        hitung = Counter(d[0] for d in deteksi)
+        self.riwayat = (self.riwayat + [hitung])[-self.FRAME_STABIL:]
+        stabil, pasti = self._stabil()
+        if stabil:
+            self.hitung = pasti
+            self.total_minuman = sum(
+                self.menu.get(k, {"harga": self.harga_default})["harga"] * n
+                for k, n in pasti.items()
+            )
+            self.frame_minuman = frame.copy()
+            self.state, self.t_state = "BAYAR", time.time()
+            self.pesan = f"Total {fmt_rupiah(self.total_minuman)} - tunjukkan BUKTI BAYAR"
+            self.pesan2 = "scan QRIS lalu tunjukkan struk ke kamera"
+            self.warna = (255, 255, 255)
+            print(
+                f"[kasir] minuman {dict(pasti)} "
+                f"total={fmt_rupiah(self.total_minuman)}"
+            )
+        elif time.time() - self.t_state > self.TIMEOUT_MINUMAN:
+            self._catat("-", 0, "TIMEOUT")
+            self.reset("Waktu habis, minuman tidak ditunjukkan")
+        return deteksi, total
+
     def _tahap_bayar(self, frame):
+        if self.dibayar:
+            self._evaluasi(frame, self.hitung, self.frame_minuman)
+            return
         sibuk = self._ocr_thread is not None and self._ocr_thread.is_alive()
         if not sibuk and self._ocr_result is not None:
             data, self._ocr_result = self._ocr_result, None
@@ -354,32 +403,22 @@ class KasirKulkas:
             if jumlah:
                 self.dibayar = jumlah
                 self.ref = data.get("referensi", "-")
-                self.state, self.t_state = "MINUMAN", time.time()
-                self.pesan = f"Pembayaran {fmt_rupiah(self.dibayar)} diterima"
-                self.pesan2 = "Tunjukkan minuman ke kamera"
-                self.warna = (0, 255, 0)
                 print(f"[kasir] bayar {fmt_rupiah(self.dibayar)} ref={self.ref}")
-            else:
-                self.pesan = "Nominal pembayaran belum terbaca"
-                self.pesan2 = "Dekatkan HP / tekan spasi untuk paksa terima"
-                self.warna = (0, 255, 255)
+                self._evaluasi(frame, self.hitung, self.frame_minuman)
+                return
+            self.pesan = "Nominal pembayaran belum terbaca"
+            self.pesan2 = "Dekatkan HP / tekan spasi untuk paksa terima"
+            self.warna = (0, 255, 255)
         elif not sibuk and time.time() - self._ocr_last > self.INTERVAL_OCR:
             self._ocr_last = time.time()
-            self._ocr_thread = threading.Thread(target=self._ocr, args=(frame.copy(),), daemon=True)
+            self._ocr_thread = threading.Thread(
+                target=self._ocr, args=(frame.copy(), self._ocr_gen), daemon=True
+            )
             self._ocr_thread.start()
-
-    def _tahap_minuman(self, frame):
-        deteksi = self._deteksi(frame)
-        total = sum(d[2] for d in deteksi)
-        hitung = Counter(d[0] for d in deteksi)
-        self.riwayat = (self.riwayat + [hitung])[-self.FRAME_STABIL:]
-        stabil, pasti = self._stabil()
-        if stabil:
-            self._evaluasi(frame, pasti)
-        elif time.time() - self.t_state > self.TIMEOUT_MINUMAN:
-            self._catat("-", 0, "TIMEOUT")
-            self.reset("Waktu habis, minuman tidak ditunjukkan")
-        return deteksi, total
+        if self.state == "BAYAR" and time.time() - self.t_state > self.TIMEOUT_BAYAR:
+            print("[kasir] bukti bayar tidak ditunjukkan; dianggap pelanggaran")
+            self.dibayar = 0
+            self._evaluasi(frame, self.hitung, self.frame_minuman)
 
     def _stabil(self) -> tuple[bool, Counter]:
         """Suara mayoritas: kelas sama & jumlah tiap kelas tidak goyah >1 tiap frame."""
@@ -398,26 +437,32 @@ class KasirKulkas:
                 return False, Counter()
         return bool(pasti), pasti
 
-    def _evaluasi(self, frame, hitung: Counter):
+    def _evaluasi(self, frame, hitung: Counter, frame_minuman=None):
         rincian = []
         total = 0
         for kelas, n in hitung.items():
             info = self.menu.get(kelas, {"nama": kelas, "harga": self.harga_default})
             rincian.append((info["nama"], n))
             total += info["harga"] * n
-        daftar = ", ".join(f"{n}x {nama}" for nama, n in rincian)
+        daftar = ", ".join(f"{n}x {nama}" for nama, n in rincian) or "-"
+        self.total_minuman = total
         self.state, self.t_state = "HASIL", time.time()
         if total > self.dibayar:
             self.pelanggaran = True
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             foto = self.folder / f"{ts}_full.jpg"
             cv2.imwrite(str(foto), frame)
+            foto_minuman = None
+            if frame_minuman is not None:
+                foto_minuman = self.folder / f"{ts}_minuman.jpg"
+                cv2.imwrite(str(foto_minuman), frame_minuman)
             self.pesan = f"PERINGATAN! Minuman {fmt_rupiah(total)} > dibayar {fmt_rupiah(self.dibayar)}"
             self.pesan2 = f"Kurang {fmt_rupiah(total - self.dibayar)} - foto disimpan"
             self.warna = (0, 0, 255)
             self._bunyi()
             print(f"[kasir] PELANGGARAN {daftar} total={fmt_rupiah(total)} -> {foto}")
             self._catat(daftar, total, "PELANGGARAN", str(foto))
+            self._kirim_telegram(foto_minuman or foto, foto, daftar, total, total - self.dibayar)
         else:
             lebih = self.dibayar - total
             self.pesan = f"Terima kasih! {daftar}"
@@ -425,6 +470,30 @@ class KasirKulkas:
             self.warna = (0, 255, 0)
             print(f"[kasir] OK {daftar} total={fmt_rupiah(total)}")
             self._catat(daftar, total, "OK")
+
+    def _kirim_telegram(self, foto, foto_bayar, daftar, total, kurang):
+        bot = self.telegram
+        if bot is None or not bot.enabled:
+            return
+        dibayar, referensi = self.dibayar, self.ref
+
+        def _go():
+            ok = bot.notify_violation(
+                foto,
+                total=total,
+                dibayar=dibayar,
+                minuman=daftar,
+                referensi=referensi,
+                kurang=kurang,
+            )
+            if not ok:
+                print(f"[kasir] telegram gagal: {bot.last_error}")
+                return
+            print("[kasir] notifikasi pelanggaran terkirim ke Telegram")
+            if Path(foto_bayar) != Path(foto) and Path(foto_bayar).exists():
+                bot.send_photo(foto_bayar, "Bukti bayar saat pelanggaran")
+
+        threading.Thread(target=_go, daemon=True, name="telegram").start()
 
     def _gambar(self, frame, deteksi, total):
         tampil = frame.copy()
@@ -445,16 +514,19 @@ class KasirKulkas:
 
         h, w = tampil.shape[:2]
         cv2.rectangle(tampil, (0, 0), (w, 78), (20, 20, 20), -1)
-        if self.state == "BAYAR":
-            judul = "1. Tunjukkan BUKTI BAYAR (layar HP) ke kamera"
-            sub = self.pesan or "scan QRIS lalu tunjukkan struk"
-            if self.engine is None:
-                sub = "OCR menyiapkan... " + sub
-        elif self.state == "MINUMAN":
-            judul = f"2. Dibayar {fmt_rupiah(self.dibayar)} - tunjukkan MINUMAN"
+        if self.state == "MINUMAN":
+            judul = "1. Tunjukkan MINUMAN ke kamera"
             sub = "tahan sampai terbaca stabil"
             if self.kandidat and not deteksi:
                 sub = f"{len(self.kandidat)} kandidat, menunggu konfirmasi..."
+        elif self.state == "BAYAR":
+            judul = (
+                f"2. Total {fmt_rupiah(self.total_minuman)} - "
+                "tunjukkan BUKTI BAYAR (layar HP)"
+            )
+            sub = self.pesan or "scan QRIS lalu tunjukkan struk"
+            if self.engine is None:
+                sub = "OCR menyiapkan... " + sub
         else:
             judul = self.pesan
             sub = self.pesan2
@@ -484,11 +556,13 @@ class KasirKulkas:
 
     def step(self, frame):
         deteksi, total = [], 0
-        if self.state == "BAYAR":
-            self._tahap_bayar(frame)
-        elif self.state == "MINUMAN":
+        if self.state == "MINUMAN":
             deteksi, total = self._tahap_minuman(frame)
+        elif self.state == "BAYAR":
+            self._tahap_bayar(frame)
+            total = self.total_minuman
         else:
+            total = self.total_minuman
             if time.time() - self.t_state > self.DURASI_HASIL:
                 self.reset()
         return deteksi, total
@@ -538,7 +612,10 @@ def main() -> int:
     ap.add_argument("--harga-default", type=int, default=5000)
     ap.add_argument("--log", default="transaksi.csv")
     ap.add_argument("--folder", default="pelanggaran")
-    ap.add_argument("--pay-image", default="", help="lewati tahap BAYAR dengan gambar struk")
+    ap.add_argument(
+        "--pay-image", default="",
+        help="pra-isi bukti bayar dari gambar; dipakai otomatis setelah minuman",
+    )
     ap.add_argument("--save", default="", help="rekam tampilan ke .mp4")
     ap.add_argument("--max-frames", type=int, default=0)
     ap.add_argument("--no-window", action="store_true")
@@ -564,9 +641,28 @@ def main() -> int:
     ap.add_argument("--md-label", default="bottle", help="kelas menu untuk kotak moondream")
     ap.add_argument("--md-resize", type=int, default=960, help="sisi maks gambar ke server")
     ap.add_argument("--no-beep", action="store_true")
+    ap.add_argument("--no-telegram", action="store_true", help="matikan notifikasi pelanggaran")
+    ap.add_argument(
+        "--telegram-token", default=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        help="token bot Telegram (default dari env)",
+    )
+    ap.add_argument(
+        "--telegram-chat", default=os.environ.get("TELEGRAM_CHAT_ID", ""),
+        help="chat id tujuan notifikasi (default dari env)",
+    )
+    ap.add_argument("--telegram-test", action="store_true", help="kirim pesan uji lalu keluar")
     ap.add_argument("--fullscreen", action="store_true", help="tampilkan layar penuh (letterbox)")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
+
+    if args.telegram_test:
+        bot = TelegramBot(args.telegram_token, args.telegram_chat)
+        if not bot.enabled:
+            print("[kasir] telegram: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID belum diisi")
+            return 1
+        ok = bot.send_message("Kasir Kulkas: tes notifikasi Telegram berhasil.")
+        print("[kasir] telegram tes:", "terkirim" if ok else f"gagal - {bot.last_error}")
+        return 0 if ok else 1
 
     if args.selftest:
         return selftest(args)
@@ -590,6 +686,9 @@ def main() -> int:
         md_prompt=args.md_prompt,
         md_label=args.md_label,
         md_resize=args.md_resize,
+        telegram=not args.no_telegram,
+        telegram_token=args.telegram_token,
+        telegram_chat=args.telegram_chat,
     )
     threading.Thread(target=kasir.preload_ocr, daemon=True, name="preload-ocr").start()
 
@@ -601,8 +700,10 @@ def main() -> int:
         print(f"[kasir] bukti: {data['status']} {fmt_rupiah(data['jumlah'] or 0)} | {data['teks'][:80]}")
         if data["jumlah"]:
             kasir.dibayar, kasir.ref = data["jumlah"], data["referensi"]
-            kasir.state, kasir.t_state = "MINUMAN", time.time()
-            print(f"[kasir] lanjut ke MINUMAN, dibayar {fmt_rupiah(kasir.dibayar)}")
+            print(
+                f"[kasir] bukti terbaca {fmt_rupiah(kasir.dibayar)}; "
+                "otomatis dipakai setelah minuman"
+            )
 
     source = int(args.source) if str(args.source).isdigit() else args.source
     cap = cv2.VideoCapture(source)
@@ -648,7 +749,7 @@ def main() -> int:
             kasir.fps = inst if kasir.fps == 0 else 0.85 * kasir.fps + 0.15 * inst
         t_prev = now
         deteksi, total = kasir.step(frame)
-        if deteksi or kasir.state != "BAYAR":
+        if deteksi:
             last_det, last_total = deteksi, total
         tampil = kasir._gambar(frame, deteksi, total)
         if disp:
@@ -664,9 +765,8 @@ def main() -> int:
             kasir.reset("Direset manual")
         elif key == ord(" ") and kasir.state == "BAYAR" and kasir.last_amount:
             kasir.dibayar = kasir.last_amount
-            kasir.state, kasir.t_state = "MINUMAN", time.time()
-            kasir.pesan = f"Dipaksa terima {fmt_rupiah(kasir.dibayar)}"
             print(f"[kasir] paksa terima {fmt_rupiah(kasir.dibayar)}")
+            kasir._evaluasi(frame, kasir.hitung, kasir.frame_minuman)
         elif key == ord("s"):
             daftar = ", ".join(f"{d[1]}" for d in last_det) or "-"
             kasir._catat(daftar, last_total, "MANUAL", "")
