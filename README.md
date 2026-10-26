@@ -21,6 +21,9 @@ src/label_remote.py      upload capture -> label Moondream di GPU -> unduh label
 src/split_dataset.py     dataset/raw -> dataset/images|labels/{train,val} + data.yaml
 src/train_remote.py      pack + upload dataset -> train di GPU -> tarik best.pt
 src/kasir_kulkas.py      aplikasi kasir realtime (3 tahap: MINUMAN, BAYAR, HASIL)
+src/reconcile.py         rekonsiliasi mutasi rekening & deteksi pelanggaran timestamp
+src/webhook_server.py    server HTTP webhook lokal penangkap notifikasi Midtrans/Bank
+src/midtrans_pay.py      klien Midtrans Snap API, status polling, & generator QR
 src/telegram_notify.py   kirim notifikasi pelanggaran ke Telegram bot (stdlib)
 src/accelerate.py        OpenVINO iGPU (auto-export + cache) & tuning thread
 src/ocr_payment.py       parser nominal Rp + engine OCR (winocr / PaddleOCR)
@@ -201,6 +204,33 @@ Jika ingin menghubungkan ke chat/akun lain secara otomatis:
 Kirim pesan `/start` ke bot `@tekber_bot` di Telegram, script akan otomatis mendeteksi Chat ID dan menyimpannya ke `.env`.
 
 Matikan notifikasi saat menjalankan kasir dengan `--no-telegram`; atau override lewat `--telegram-token` / `--telegram-chat`.
+
+### Pembayaran Midtrans, QRIS Statis, & Rekonsiliasi Mutasi
+
+Kasir kulkas terintegrasi dengan **Midtrans Payment Gateway** dan **Sistem Rekonsiliasi Mutasi**:
+- Di tahap `BAYAR`, kasir menampilkan **QR Code Midtrans** di layar laptop kasir.
+- Pembeli scan QR lewat HP > bayar di Midtrans Sandbox (GoPay / ShopeePay / VA).
+- Notifikasi pembayaran masuk secara instan ke server webhook lokal kasir (`http://localhost:8091/webhook/midtrans`) via Cloudflare Tunnel (`https://kulkas.ruwwww-thesis.my.id`).
+- Pembeli menghadapkan layar HP ("Pembayaran Berhasil") ke kamera kasir.
+- **Sistem Rekonsiliasi 3-Arah (`src/reconcile.py`)** memvalidasi:
+  1. **Nominal**: Uang masuk >= total belanjaan.
+  2. **Anti-Screenshot Lama**: Selisih jam struk HP vs jam kamera laptop kasir $\le 3$ menit (`PELANGGARAN_TIMESTAMP_KADALUARSA`).
+  3. **Anti-Struk Palsu**: Memastikan uang benar-benar masuk di mutasi rekening (`PELANGGARAN_MUTASI_NIHIL`).
+  4. **Anti-Double Spend**: Struk atau ID mutasi yang sama tidak dapat dipakai dua kali.
+
+> 📖 **Dokumentasi Lengkap:** Lihat [docs/REKONSILIASI_DAN_MIDTRANS.md](docs/REKONSILIASI_DAN_MIDTRANS.md) untuk panduan teknis mendalam dan skenario pengujian demo.
+
+**Uji coba cepat:**
+```powershell
+# 1. Cek info koneksi Midtrans
+.\scripts\13_midtrans.ps1 -Info
+
+# 2. Simulasi injeksi mutasi masuk Rp 10.000 ke webhook
+.\scripts\14_webhook_tunnel.ps1 -Simulate 10000 -Ref "TRX-DEMO-001"
+
+# 3. Jalankan kasir kulkas (mode ketat mutasi)
+.venv\Scripts\python.exe src\kasir_kulkas.py --require-mutation --tolerance-sec 180
+```
 
 ## Backend Moondream (opsional, deteksi realtime)
 

@@ -60,7 +60,16 @@ def load_detector(path: str | Path, imgsz: int = 640, device: str = "auto"):
 
     if p.suffix.lower() == ".pt":
         ov_dir = p.parent / f"{p.stem}_openvino_model"
-        if not ov_dir.exists():
+        needs_export = not ov_dir.exists()
+        if not needs_export:
+            # Re-export jika file .pt lebih baru daripada folder OpenVINO
+            try:
+                if p.stat().st_mtime > ov_dir.stat().st_mtime:
+                    needs_export = True
+            except OSError:
+                pass
+
+        if needs_export:
             print(f"[fast] ekspor OpenVINO sekali saja: {ov_dir.name} (imgsz {imgsz})")
             YOLO(str(p)).export(format="openvino", imgsz=imgsz, half=False, dynamic=False)
         p = ov_dir

@@ -22,6 +22,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -34,8 +35,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import ROOT, fmt_rupiah, letterbox, load_env, screen_size  # noqa: E402
 from accelerate import load_detector, tune_threads  # noqa: E402
 from md_remote import DEFAULT_URL as DEFAULT_MD_URL, MoondreamEngine  # noqa: E402
+from midtrans_pay import MidtransGateway  # noqa: E402
 from ocr_payment import PaddleEngine, find_amounts, preprocess  # noqa: E402
+from reconcile import MutationStore, Reconciler, parse_receipt_datetime  # noqa: E402
 from telegram_notify import TelegramBot  # noqa: E402
+from webhook_server import start_webhook_server  # noqa: E402
 
 REF_RE = re.compile(
     r"(?:ref|no\.?\s*ref|id transaksi|transaction id|no\.?\s*transaksi)[\s:.#]*([a-z0-9]{6,})",
@@ -115,6 +119,8 @@ class KasirKulkas:
         min_area=0.01, min_confirm=3, confirm_sec=0.35,
         detector="yolo", md_url="", md_prompt="bottle", md_label="bottle",
         md_resize=960, telegram=True, telegram_token="", telegram_chat="",
+        midtrans=True, midtrans_server="", midtrans_client="", midtrans_merchant="",
+        webhook=True, webhook_port=8091, tolerance_sec=180, require_mutation=False,
     ):
         tune_threads()
         self.menu = menu
@@ -166,6 +172,40 @@ class KasirKulkas:
                 "[kasir] telegram belum dikonfigurasi "
                 "(set TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID)"
             )
+        self.midtrans = (
+            MidtransGateway(
+                server_key=midtrans_server,
+                client_key=midtrans_client,
+                merchant_id=midtrans_merchant,
+            )
+            if midtrans
+            else None
+        )
+        if self.midtrans is not None and self.midtrans.enabled:
+            mode = "PROD" if self.midtrans.is_production else "SANDBOX"
+            print(f"[kasir] pembayaran Midtrans ({mode}) aktif")
+        elif self.midtrans is not None:
+            print("[kasir] midtrans belum dikonfigurasi (set MIDTRANS_SERVER_KEY)")
+        self.midtrans_order_id = ""
+        self.midtrans_qr = None
+        self.midtrans_paid = False
+        self.midtrans_poll_gen = 0
+
+        self.mutation_store = MutationStore()
+        self.reconciler = Reconciler(
+            store=self.mutation_store,
+            tolerance_seconds=tolerance_sec,
+            require_mutation=require_mutation,
+        )
+        self.webhook_server = None
+        if webhook:
+            try:
+                self.webhook_server = start_webhook_server(
+                    port=webhook_port, store=self.mutation_store
+                )
+                print(f"[kasir] webhook mutasi lokal aktif di http://localhost:{webhook_port}")
+            except Exception as exc:
+                print(f"[kasir] webhook server gagal di port {webhook_port}: {exc}")
         print(f"[kasir] menu {len(menu)} item")
 
         self.ocr_backend = ocr
@@ -200,6 +240,10 @@ class KasirKulkas:
         self._ocr_result = None
         self._ocr_last = 0.0
         self._ocr_gen += 1
+        self.midtrans_order_id = ""
+        self.midtrans_qr = None
+        self.midtrans_paid = False
+        self.midtrans_poll_gen += 1
 
     def _bunyi(self):
         if not self.beep:
@@ -278,10 +322,12 @@ class KasirKulkas:
         nominal = max(jumlah) if jumlah else None
         status = "BERHASIL" if nominal else "TIDAK DIKETAHUI"
         ref = REF_RE.search(" ".join(texts))
+        waktu_struk = parse_receipt_datetime(texts)
         return {
             "jumlah": nominal,
             "status": status,
             "referensi": ref.group(1).upper() if ref else "-",
+            "waktu_struk": waktu_struk,
             "teks": " | ".join(texts),
         }
 
@@ -379,8 +425,13 @@ class KasirKulkas:
             )
             self.frame_minuman = frame.copy()
             self.state, self.t_state = "BAYAR", time.time()
-            self.pesan = f"Total {fmt_rupiah(self.total_minuman)} - tunjukkan BUKTI BAYAR"
-            self.pesan2 = "scan QRIS lalu tunjukkan struk ke kamera"
+            if self.midtrans and self.midtrans.enabled and self.total_minuman > 0:
+                self.pesan = f"Total {fmt_rupiah(self.total_minuman)} - Scan QR / tunjukkan bukti"
+                self.pesan2 = "Scan QR di layar atau tunjukkan bukti bayar ke kamera"
+                self._mulai_midtrans(self.total_minuman, pasti)
+            else:
+                self.pesan = f"Total {fmt_rupiah(self.total_minuman)} - tunjukkan BUKTI BAYAR"
+                self.pesan2 = "scan QRIS lalu tunjukkan struk ke kamera"
             self.warna = (255, 255, 255)
             print(
                 f"[kasir] minuman {dict(pasti)} "
@@ -391,10 +442,61 @@ class KasirKulkas:
             self.reset("Waktu habis, minuman tidak ditunjukkan")
         return deteksi, total
 
-    def _tahap_bayar(self, frame):
-        if self.dibayar:
-            self._evaluasi(frame, self.hitung, self.frame_minuman)
+    def _mulai_midtrans(self, total: int, hitung: Counter):
+        if self.midtrans is None or not self.midtrans.enabled or total <= 0:
             return
+        self.midtrans_poll_gen += 1
+        gen = self.midtrans_poll_gen
+        order_id = f"KASIR-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
+        self.midtrans_order_id = order_id
+        self.midtrans_qr = None
+        self.midtrans_paid = False
+
+        def _worker():
+            items = []
+            for k, count in hitung.items():
+                info = self.menu.get(k, {"nama": k, "harga": self.harga_default})
+                items.append({
+                    "id": str(k)[:20],
+                    "price": int(info["harga"]),
+                    "quantity": int(count),
+                    "name": str(info["nama"])[:50],
+                })
+            res = self.midtrans.create_snap_transaction(order_id, total, item_details=items)
+            if not res or gen != self.midtrans_poll_gen:
+                return
+            redirect_url = res.get("redirect_url")
+            if redirect_url:
+                qr = self.midtrans.generate_qr_image(redirect_url, size=180, border=4)
+                if gen == self.midtrans_poll_gen:
+                    self.midtrans_qr = qr
+                    print(f"[kasir] midtrans snap siap: {order_id} -> {redirect_url}")
+
+            # Polling status sampai bayar / state berubah
+            while gen == self.midtrans_poll_gen and self.state == "BAYAR":
+                time.sleep(1.5)
+                st = self.midtrans.check_status(order_id)
+                if st and self.midtrans.is_settled(st):
+                    print(f"[kasir] pembayaran Midtrans lunas: {order_id}")
+                    # Catat mutasi masuk ke MutationStore kasir
+                    self.mutation_store.add(
+                        m_id=order_id,
+                        amount=total,
+                        timestamp=datetime.now(),
+                        source="midtrans",
+                        ref=order_id,
+                    )
+                    self.midtrans_paid = True
+                    self.pesan = "Uang Midtrans masuk! Tunjukkan STRUK HP"
+                    self.pesan2 = "Hadapkan layar struk HP ke kamera untuk verifikasi"
+                    self.warna = (0, 235, 255)
+                    break
+
+        threading.Thread(target=_worker, daemon=True, name="midtrans").start()
+
+    def _tahap_bayar(self, frame):
+        # Catatan: Kasir tetap menunggu pembeli menghadapkan layar HP (bukti transfer) ke kamera
+        # agar rekonsiliasi timestamp struk vs mutasi berjalan & foto bukti tersimpan.
         sibuk = self._ocr_thread is not None and self._ocr_thread.is_alive()
         if not sibuk and self._ocr_result is not None:
             data, self._ocr_result = self._ocr_result, None
@@ -403,12 +505,30 @@ class KasirKulkas:
             if jumlah:
                 self.dibayar = jumlah
                 self.ref = data.get("referensi", "-")
-                print(f"[kasir] bayar {fmt_rupiah(self.dibayar)} ref={self.ref}")
-                self._evaluasi(frame, self.hitung, self.frame_minuman)
+                waktu_struk = data.get("waktu_struk")
+                now = datetime.now()
+                is_ok, reason, detail = self.reconciler.verify(
+                    nominal_ocr=jumlah,
+                    total_tagihan=self.total_minuman,
+                    scan_time=now,
+                    receipt_time=waktu_struk,
+                    referensi=self.ref,
+                )
+                if is_ok:
+                    print(f"[kasir] bayar {fmt_rupiah(self.dibayar)} ref={self.ref} ({reason})")
+                    self._evaluasi(frame, self.hitung, self.frame_minuman)
+                else:
+                    print(f"[kasir] REKONSILIASI GAGAL: {reason} | detail={detail}")
+                    self._evaluasi(frame, self.hitung, self.frame_minuman, alasan=reason)
                 return
-            self.pesan = "Nominal pembayaran belum terbaca"
-            self.pesan2 = "Dekatkan HP / tekan spasi untuk paksa terima"
-            self.warna = (0, 255, 255)
+            if self.midtrans_paid:
+                self.pesan = "Uang Midtrans masuk! Tunjukkan STRUK HP"
+                self.pesan2 = "Dekatkan layar HP struk pembayaran ke kamera"
+                self.warna = (0, 235, 255)
+            else:
+                self.pesan = "Nominal pembayaran belum terbaca"
+                self.pesan2 = "Dekatkan HP / tekan spasi untuk paksa terima"
+                self.warna = (0, 255, 255)
         elif not sibuk and time.time() - self._ocr_last > self.INTERVAL_OCR:
             self._ocr_last = time.time()
             self._ocr_thread = threading.Thread(
@@ -437,7 +557,7 @@ class KasirKulkas:
                 return False, Counter()
         return bool(pasti), pasti
 
-    def _evaluasi(self, frame, hitung: Counter, frame_minuman=None):
+    def _evaluasi(self, frame, hitung: Counter, frame_minuman=None, alasan: str = ""):
         rincian = []
         total = 0
         for kelas, n in hitung.items():
@@ -447,7 +567,8 @@ class KasirKulkas:
         daftar = ", ".join(f"{n}x {nama}" for nama, n in rincian) or "-"
         self.total_minuman = total
         self.state, self.t_state = "HASIL", time.time()
-        if total > self.dibayar:
+        is_pelanggaran = (total > self.dibayar) or bool(alasan)
+        if is_pelanggaran:
             self.pelanggaran = True
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             foto = self.folder / f"{ts}_full.jpg"
@@ -456,13 +577,22 @@ class KasirKulkas:
             if frame_minuman is not None:
                 foto_minuman = self.folder / f"{ts}_minuman.jpg"
                 cv2.imwrite(str(foto_minuman), frame_minuman)
-            self.pesan = f"PERINGATAN! Minuman {fmt_rupiah(total)} > dibayar {fmt_rupiah(self.dibayar)}"
-            self.pesan2 = f"Kurang {fmt_rupiah(total - self.dibayar)} - foto disimpan"
+            if alasan:
+                label_alasan = alasan.replace("PELANGGARAN_", "").replace("_", " ")
+                self.pesan = f"PERINGATAN! {label_alasan[:35]}"
+                self.pesan2 = f"Total {fmt_rupiah(total)} - foto disimpan"
+            else:
+                self.pesan = f"PERINGATAN! Minuman {fmt_rupiah(total)} > dibayar {fmt_rupiah(self.dibayar)}"
+                self.pesan2 = f"Kurang {fmt_rupiah(total - self.dibayar)} - foto disimpan"
             self.warna = (0, 0, 255)
             self._bunyi()
-            print(f"[kasir] PELANGGARAN {daftar} total={fmt_rupiah(total)} -> {foto}")
-            self._catat(daftar, total, "PELANGGARAN", str(foto))
-            self._kirim_telegram(foto_minuman or foto, foto, daftar, total, total - self.dibayar)
+            status_log = f"PELANGGARAN: {alasan}" if alasan else "PELANGGARAN"
+            print(f"[kasir] {status_log} {daftar} total={fmt_rupiah(total)} -> {foto}")
+            self._catat(daftar, total, status_log, str(foto))
+            self._kirim_telegram(
+                foto_minuman or foto, foto, daftar, total, max(0, total - self.dibayar),
+                catatan=f"Alasan: {alasan}" if alasan else ""
+            )
         else:
             lebih = self.dibayar - total
             self.pesan = f"Terima kasih! {daftar}"
@@ -471,7 +601,7 @@ class KasirKulkas:
             print(f"[kasir] OK {daftar} total={fmt_rupiah(total)}")
             self._catat(daftar, total, "OK")
 
-    def _kirim_telegram(self, foto, foto_bayar, daftar, total, kurang):
+    def _kirim_telegram(self, foto, foto_bayar, daftar, total, kurang, catatan: str = ""):
         bot = self.telegram
         if bot is None or not bot.enabled:
             return
@@ -485,6 +615,7 @@ class KasirKulkas:
                 minuman=daftar,
                 referensi=referensi,
                 kurang=kurang,
+                catatan=catatan,
             )
             if not ok:
                 print(f"[kasir] telegram gagal: {bot.last_error}")
@@ -542,6 +673,47 @@ class KasirKulkas:
                 tampil, f"MD {self.md_ms:3.0f}ms", (w - 120, 52),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 255), 1,
             )
+
+        if self.state == "BAYAR" and self.midtrans_qr is not None:
+            qh, qw = self.midtrans_qr.shape[:2]
+            top = 84
+            right = w - qw - 20
+            if right > 0 and top + qh < h - 60:
+                cv2.rectangle(
+                    tampil,
+                    (right - 8, top - 24),
+                    (right + qw + 8, top + qh + 20),
+                    (25, 25, 25),
+                    -1,
+                )
+                cv2.rectangle(
+                    tampil,
+                    (right - 8, top - 24),
+                    (right + qw + 8, top + qh + 20),
+                    (0, 235, 255),
+                    2,
+                )
+                cv2.putText(
+                    tampil,
+                    "SCAN QR UNTUK BAYAR",
+                    (right - 2, top - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.42,
+                    (0, 235, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+                tampil[top : top + qh, right : right + qw] = self.midtrans_qr
+                cv2.putText(
+                    tampil,
+                    "Midtrans Sandbox QRIS",
+                    (right + 4, top + qh + 14),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.38,
+                    (200, 200, 200),
+                    1,
+                    cv2.LINE_AA,
+                )
 
         cv2.rectangle(tampil, (0, h - 58), (w, h), (20, 20, 20), -1)
         kiri = f"Total: {fmt_rupiah(total)}"
@@ -651,6 +823,24 @@ def main() -> int:
         help="chat id tujuan notifikasi (default dari env)",
     )
     ap.add_argument("--telegram-test", action="store_true", help="kirim pesan uji lalu keluar")
+    ap.add_argument("--no-midtrans", action="store_true", help="matikan pembayaran online Midtrans")
+    ap.add_argument(
+        "--midtrans-server", default=os.environ.get("MIDTRANS_SERVER_KEY", ""),
+        help="Midtrans Server Key (default dari env)",
+    )
+    ap.add_argument(
+        "--midtrans-client", default=os.environ.get("MIDTRANS_CLIENT_KEY", ""),
+        help="Midtrans Client Key (default dari env)",
+    )
+    ap.add_argument(
+        "--midtrans-merchant", default=os.environ.get("MIDTRANS_MERCHANT_ID", ""),
+        help="Midtrans Merchant ID (default dari env)",
+    )
+    ap.add_argument("--midtrans-test", action="store_true", help="uji koneksi Midtrans lalu keluar")
+    ap.add_argument("--no-webhook", action="store_true", help="matikan server webhook lokal")
+    ap.add_argument("--webhook-port", type=int, default=8091, help="port webhook lokal (default: 8091)")
+    ap.add_argument("--require-mutation", action="store_true", help="wajibkan mutasi rekening masuk sebelum lunas")
+    ap.add_argument("--tolerance-sec", type=int, default=180, help="toleransi selisih waktu (detik, default: 180)")
     ap.add_argument("--fullscreen", action="store_true", help="tampilkan layar penuh (letterbox)")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
@@ -663,6 +853,26 @@ def main() -> int:
         ok = bot.send_message("Kasir Kulkas: tes notifikasi Telegram berhasil.")
         print("[kasir] telegram tes:", "terkirim" if ok else f"gagal - {bot.last_error}")
         return 0 if ok else 1
+
+    if args.midtrans_test:
+        gw = MidtransGateway(
+            server_key=args.midtrans_server,
+            client_key=args.midtrans_client,
+            merchant_id=args.midtrans_merchant,
+        )
+        if not gw.enabled:
+            print("[kasir] midtrans: MIDTRANS_SERVER_KEY belum diisi di .env")
+            return 1
+        print(f"[kasir] menguji Midtrans Snap ({'PROD' if gw.is_production else 'SANDBOX'})...")
+        test_id = f"KASIR-TEST-{uuid.uuid4().hex[:6].upper()}"
+        res = gw.create_snap_transaction(
+            test_id, 10000, [{"id": "TEST", "price": 10000, "quantity": 1, "name": "Tes Transaksi"}]
+        )
+        if res and res.get("redirect_url"):
+            print(f"[kasir] midtrans tes: BERHASIL -> {res['redirect_url']}")
+            return 0
+        print(f"[kasir] midtrans tes: GAGAL -> {gw.last_error}")
+        return 1
 
     if args.selftest:
         return selftest(args)
@@ -689,6 +899,14 @@ def main() -> int:
         telegram=not args.no_telegram,
         telegram_token=args.telegram_token,
         telegram_chat=args.telegram_chat,
+        midtrans=not args.no_midtrans,
+        midtrans_server=args.midtrans_server,
+        midtrans_client=args.midtrans_client,
+        midtrans_merchant=args.midtrans_merchant,
+        webhook=not args.no_webhook,
+        webhook_port=args.webhook_port,
+        tolerance_sec=args.tolerance_sec,
+        require_mutation=args.require_mutation,
     )
     threading.Thread(target=kasir.preload_ocr, daemon=True, name="preload-ocr").start()
 

@@ -14,7 +14,9 @@ data.local.yaml
 # output demo
 *.mp4
 transaksi.csv
+mutasi.jsonl
 logs/
+*.txt
 
 # python
 .venv/
