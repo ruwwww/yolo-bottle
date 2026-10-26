@@ -4,7 +4,7 @@ param(
     [int]$Imgsz = 640,
     [string]$Model = "yolo11s.pt",
     [string]$Dataset = "dataset",
-    [string]$Names = "",
+    [string[]]$Names = @(),
     [string]$Out = "weights\multiclass_best.pt",
     [string]$HostName = ""
 )
@@ -16,6 +16,7 @@ $cli = @(
     "src\train_remote.py", "--dataset", $Dataset, "--epochs", $Epochs,
     "--batch", $Batch, "--imgsz", $Imgsz, "--model", $Model, "--out", $Out
 )
-if ($Names) { $cli += @("--names", $Names) }
+$namesArg = $Names -join ","
+if ($namesArg) { $cli += @("--names", $namesArg) }
 if ($HostName) { $cli += @("--host", $HostName) }
 & .venv\Scripts\python.exe @cli

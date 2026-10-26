@@ -37,8 +37,8 @@ add_root_to_path()
 DEFAULT_CLASSES = "bottle,ballpoint_box,computer_mouse,teh_pucuk,golda"
 
 PROMPT_HINTS = {
-    "teh_pucuk": "teh pucuk bottle",
-    "golda": "golda coffee bottle",
+    "teh_pucuk": "bottle",
+    "golda": "bottle",
 }
 
 

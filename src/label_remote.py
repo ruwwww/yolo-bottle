@@ -69,7 +69,7 @@ def count_images(source: Path) -> tuple[int, Counter]:
     return sum(per.values()), per
 
 
-def pack(source: Path) -> Path:
+def pack(source: Path, only: set[str] | None = None) -> Path:
     ensure_dirs(BUILD)
     archive = BUILD / "capture_upload.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:
@@ -78,7 +78,7 @@ def pack(source: Path) -> Path:
             if f.exists():
                 tar.add(f, arcname=f"capture/{name}")
         for d in sorted(source.iterdir()):
-            if d.is_dir():
+            if d.is_dir() and (only is None or d.name in only):
                 tar.add(d, arcname=f"capture/{d.name}")
     return archive
 
@@ -150,6 +150,10 @@ def main() -> int:
     ap.add_argument("--source", default=str(CAPTURE), help="folder capture (berisi kelas/)")
     ap.add_argument("--out", default=str(DATASET / "raw"), help="tujuan images/ + labels/")
     ap.add_argument("--prompts", default="", help='override, contoh "bottle=bottle"')
+    ap.add_argument(
+        "--classes", default="",
+        help="label hanya kelas ini (dipisah koma); class-id tetap dari classes.txt",
+    )
     ap.add_argument("--resize", type=int, default=640)
     ap.add_argument("--min-area", type=float, default=0.004)
     ap.add_argument("--limit", type=int, default=0, help="maks gambar per kelas (uji cepat)")
@@ -170,16 +174,29 @@ def main() -> int:
     if not (source / "classes.txt").exists():
         raise SystemExit(f"{source}/classes.txt tidak ada — capture dulu dengan src/collect_dataset.py")
     classes = [c.strip() for c in (source / "classes.txt").read_text(encoding="utf-8").splitlines() if c.strip()]
+    label_classes = classes
+    if args.classes:
+        minta = [c.strip() for c in args.classes.split(",") if c.strip()]
+        asing = [c for c in minta if c not in classes]
+        if asing:
+            raise SystemExit(f"kelas tidak ada di classes.txt: {', '.join(asing)}")
+        label_classes = [c for c in classes if c in minta]
     total, per = count_images(source)
-    if not total:
-        raise SystemExit(f"tidak ada gambar di {source}/<kelas>/")
-    print("[1/6] capture: " + ", ".join(f"{k}={v}" for k, v in per.items()) + f" (total {total})")
+    total_pilih = sum(per.get(c, 0) for c in label_classes)
+    if not total_pilih:
+        raise SystemExit(f"tidak ada gambar untuk kelas: {', '.join(label_classes)}")
+    print(
+        "[1/6] capture: "
+        + ", ".join(f"{k}={per.get(k, 0)}" for k in label_classes)
+        + f" (total {total_pilih})"
+    )
 
     prompts = {c: c.replace("_", " ") for c in classes}
     prompts.update(read_prompts(source / "prompts.txt"))
     prompts.update(parse_prompts(args.prompts))
     prompt_arg = ",".join(f"{c}={prompts[c]}" for c in classes)
-    print("[1/6] prompt : " + ", ".join(f"{c}='{prompts[c]}'" for c in classes))
+    print("[1/6] prompt : " + ", ".join(f"{c}='{prompts[c]}'" for c in label_classes))
+    only_arg = ",".join(label_classes) if args.classes else ""
 
     print(f"[2/6] cek koneksi {args.host}")
     who = ssh(args.host, "whoami; hostname; echo $HOME").splitlines()
@@ -197,7 +214,7 @@ def main() -> int:
         print(f"      remote job: {job}")
 
         print("[3/6] pack + upload capture")
-        archive = pack(source)
+        archive = pack(source, only=set(label_classes) if args.classes else None)
         scp(args.host, archive, f"{job}/upload.tar.gz")
         ssh(args.host, f"cd {job} && tar -xzf upload.tar.gz && rm -f upload.tar.gz")
         scp(args.host, ROOT / "remote" / "label_moondream.py", f"{job}/label_moondream.py")
@@ -213,7 +230,7 @@ def main() -> int:
             f"cd {job} && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True "
             f"{args.python} label_moondream.py "
             f"--root capture --out raw --resize {args.resize} --min-area {args.min_area} "
-            f"--prompts {shlex.quote(prompt_arg)} {limit} {extra}"
+            f"--prompts {shlex.quote(prompt_arg)} --only {shlex.quote(only_arg)} {limit} {extra}"
         )
         print("[4/6] labeling di GPU (Moondream), progres:")
         started = time.time()
@@ -229,7 +246,7 @@ def main() -> int:
 
     print("[5/6] unduh label")
     ssh(args.host, f"cd {job} && tar -czf raw.tar.gz raw")
-    lokal = BUILD / "raw_remote"
+    lokal = BUILD / "raw"
     if lokal.exists():
         shutil.rmtree(lokal)
     ensure_dirs(lokal.parent)

@@ -25,8 +25,8 @@ dan laptop bisa offline. Label baru dibuat saat langkah 2 di server.
 | 1      | `bottle`         | `bottle`                         | `water bottle`, `plastic bottle` |
 | 2      | `ballpoint_box`  | `ballpoint box`                  | `pen box`, `box of pens`       |
 | 3      | `computer_mouse` | `computer mouse`                 | `mouse`, `wireless mouse`      |
-| 4      | `teh_pucuk`      | `teh pucuk bottle`               | `teh pucuk`, `iced tea bottle` |
-| 5      | `golda`          | `golda coffee bottle`            | `golda coffee`, `coffee bottle` |
+| 4      | `teh_pucuk`      | `bottle`                         | `plastic bottle`, `iced tea bottle` |
+| 5      | `golda`          | `bottle`                         | `plastic bottle`, `coffee bottle` |
 
 Urutan di `dataset/capture/classes.txt` = **class-id YOLO** (0, 1, 2, 3, 4).
 Jangan diubah setelah ada label. Prompt ada di `dataset/capture/prompts.txt`
@@ -37,7 +37,7 @@ dan boleh diedit kapan saja sebelum labeling.
 ```
 dataset/capture/
   classes.txt            # bottle / ballpoint_box / computer_mouse / teh_pucuk / golda
-  prompts.txt            # bottle=bottle, teh_pucuk=teh pucuk bottle, ...
+  prompts.txt            # bottle=bottle, teh_pucuk=bottle, golda=bottle, ...
   manifest.csv           # file, kelas, waktu, source, frame
   bottle/frame_*.jpg
   ballpoint_box/frame_*.jpg
@@ -158,8 +158,16 @@ dengan `classes.txt`), lalu:
 ## Menambah data di kemudian hari
 
 1. Jalankan capture lagi (folder lama tetap, file baru menumpuk).
-2. Jalankan `python src/label_remote.py` — hanya memproses yang ada di folder
-   capture; hasilnya digabung ke `dataset/raw` (file dengan nama sama ditimpa).
+2. Label hanya kelas yang baru/berubah supaya tidak mengulang semuanya:
+
+   ```powershell
+   .\scripts\9_label_moondream.ps1 -Classes teh_pucuk,golda
+   # sama dengan:
+   .venv\Scripts\python.exe src\label_remote.py --classes teh_pucuk,golda
+   ```
+
+   Tanpa `--classes`, semua kelas di `classes.txt` akan dilabeli ulang dari awal.
+   Hasil kelas yang dipilih digabung ke `dataset/raw`; label lama tetap ada.
 3. Split + training ulang seperti biasa.
 
 Kalau ingin melabeli ulang dari nol, hapus `dataset/raw` dulu.

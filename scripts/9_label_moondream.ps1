@@ -2,6 +2,7 @@ param(
     [string]$Source = "dataset\capture",
     [string]$Out = "dataset\raw",
     [string]$Prompts = "",
+    [string[]]$Classes = @(),
     [int]$Limit = 0,
     [int]$Resize = 640,
     [switch]$SkipEmpty,
@@ -16,7 +17,9 @@ $cli = @(
     "src\label_remote.py", "--source", $Source, "--out", $Out,
     "--resize", $Resize
 )
+$classesArg = $Classes -join ","
 if ($Prompts) { $cli += @("--prompts", $Prompts) }
+if ($classesArg) { $cli += @("--classes", $classesArg) }
 if ($Limit -gt 0) { $cli += @("--limit", $Limit) }
 if ($SkipEmpty) { $cli += "--skip-empty" }
 if ($KeepRemote) { $cli += "--keep-remote" }

@@ -63,6 +63,10 @@ def main() -> int:
     ap.add_argument("--root", default="capture")
     ap.add_argument("--out", default="raw")
     ap.add_argument("--prompts", default="", help='override "kelas=prompt,kelas2=prompt2"')
+    ap.add_argument(
+        "--only", default="",
+        help="label hanya kelas ini (id tetap mengikuti classes.txt)",
+    )
     ap.add_argument("--model", default="moondream2")
     ap.add_argument("--resize", type=int, default=640, help="sisi maks sebelum deteksi")
     ap.add_argument("--min-area", type=float, default=0.004, help="area kotak minimum")
@@ -77,6 +81,7 @@ def main() -> int:
     if not classes_file.exists():
         raise SystemExit(f"{classes_file} tidak ada")
     classes = [c.strip() for c in classes_file.read_text(encoding="utf-8").splitlines() if c.strip()]
+    only = {c.strip() for c in args.only.split(",") if c.strip()}
     prompts = {c: c.replace("_", " ") for c in classes}
     prompts.update(read_prompts(root / "prompts.txt"))
     prompts.update(parse_prompts(args.prompts))
@@ -99,6 +104,8 @@ def main() -> int:
     kosong = 0
     per_kelas: Counter = Counter()
     for cls_id, kelas in enumerate(classes):
+        if only and kelas not in only:
+            continue
         folder = root / kelas
         if not folder.exists():
             print(f"[label] (lewati) folder {folder} tidak ada")

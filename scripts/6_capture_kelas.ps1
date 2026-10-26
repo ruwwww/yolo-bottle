@@ -1,6 +1,6 @@
 param(
     [string]$Source = "0",
-    [string]$Classes = "bottle,ballpoint_box,computer_mouse,teh_pucuk,golda",
+    [string[]]$Classes = @("bottle", "ballpoint_box", "computer_mouse", "teh_pucuk", "golda"),
     [string]$Prompts = "",
     [string]$Class = "",
     [double]$AutoSave = 0,
@@ -10,8 +10,9 @@ param(
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
+$classesArg = $Classes -join ","
 $cli = @(
-    "src\collect_dataset.py", "--source", $Source, "--classes", $Classes,
+    "src\collect_dataset.py", "--source", $Source, "--classes", $classesArg,
     "--out", $Out, "--max", $Max, "--auto-save", $AutoSave
 )
 if ($Prompts) { $cli += @("--prompts", $Prompts) }
