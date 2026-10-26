@@ -547,7 +547,7 @@ class KasirKulkas:
                 )
                 if is_ok:
                     print(f"[kasir] bayar {fmt_rupiah(self.dibayar)} ref={self.ref} ({reason})")
-                    self._evaluasi(frame, self.hitung, self.frame_minuman)
+                    self._evaluasi(frame, self.hitung, self.frame_minuman, kategori=reason)
                 else:
                     print(f"[kasir] REKONSILIASI GAGAL: {reason} | detail={detail}")
                     self._evaluasi(frame, self.hitung, self.frame_minuman, alasan=reason)
@@ -588,7 +588,7 @@ class KasirKulkas:
                 return False, Counter()
         return bool(pasti), pasti
 
-    def _evaluasi(self, frame, hitung: Counter, frame_minuman=None, alasan: str = ""):
+    def _evaluasi(self, frame, hitung: Counter, frame_minuman=None, alasan: str = "", kategori: str = "OK"):
         rincian = []
         total = 0
         for kelas, n in hitung.items():
@@ -655,12 +655,25 @@ class KasirKulkas:
             foto_struk = self.folder / f"{ts}_ok_struk.jpg"
             cv2.imwrite(str(foto_struk), frame_bukti)
 
-            self.pesan = f"Terima kasih! {daftar}"
-            self.pesan2 = f"Lebih bayar {fmt_rupiah(lebih)}" if lebih else "Pembayaran pas"
-            self.warna = (0, 255, 0)
-            print(f"[kasir] OK {daftar} total={fmt_rupiah(total)} -> {foto_struk}")
+            if kategori == "OK_REKONSILIASI_MUTASI":
+                status_catat = "LUNAS: TERVERIFIKASI MUTASI"
+                self.pesan = f"Lunas Terverifikasi! {daftar}"
+                self.pesan2 = f"Mutasi bank cocok! Lebih {fmt_rupiah(lebih)}" if lebih else "Mutasi bank cocok! Pembayaran pas"
+                self.warna = (0, 255, 0)
+            elif kategori == "MANUAL_PAKSA":
+                status_catat = "MANUAL: PAKSA TERIMA"
+                self.pesan = f"Diterima Manual! {daftar}"
+                self.pesan2 = "Pembayaran diterima manual kasir"
+                self.warna = (0, 255, 255)
+            else:
+                status_catat = "PENDING: MENUNGGU MUTASI"
+                self.pesan = f"Struk Terbaca (Pending)! {daftar}"
+                self.pesan2 = "Menunggu konfirmasi mutasi bank..."
+                self.warna = (0, 215, 255)
+
+            print(f"[kasir] {status_catat} {daftar} total={fmt_rupiah(total)} -> {foto_struk}")
             self._catat(
-                daftar, total, "OK",
+                daftar, total, status_catat,
                 foto=str(foto_struk),
                 foto_minuman=str(foto_minuman) if foto_minuman else "",
                 foto_pelanggaran="",

@@ -259,40 +259,42 @@ class Reconciler:
                 return False, "PELANGGARAN_TIMESTAMP_KADALUARSA", detail
 
         # 4. Rekonsiliasi dengan Mutasi Rekening (Feed Mutasi)
-        if self.require_mutation:
-            matched_mutation = None
-            recent_mutations = self.store.list_recent(window_seconds=self.tolerance * 3)
+        matched_mutation = None
+        recent_mutations = self.store.list_recent(window_seconds=self.tolerance * 3)
 
-            for m in recent_mutations:
-                if m.claimed:
-                    continue
-                if m.amount < total_tagihan:
-                    continue
+        for m in recent_mutations:
+            if m.claimed:
+                continue
+            if m.amount < total_tagihan:
+                continue
 
-                # Bandingkan waktu mutasi dengan waktu scan & waktu struk
-                ref_time = receipt_time if receipt_time is not None else scan_time
-                diff_mutation_receipt = abs((m.timestamp - ref_time).total_seconds())
-                diff_mutation_scan = abs((m.timestamp - scan_time).total_seconds())
+            # Bandingkan waktu mutasi dengan waktu scan & waktu struk
+            ref_time = receipt_time if receipt_time is not None else scan_time
+            diff_mutation_receipt = abs((m.timestamp - ref_time).total_seconds())
+            diff_mutation_scan = abs((m.timestamp - scan_time).total_seconds())
 
-                if diff_mutation_receipt <= self.tolerance and diff_mutation_scan <= self.tolerance:
-                    matched_mutation = m
-                    detail["time_diff_mutation_receipt_sec"] = int(diff_mutation_receipt)
-                    detail["matched_mutation_id"] = m.id
-                    break
+            if diff_mutation_receipt <= self.tolerance and diff_mutation_scan <= self.tolerance:
+                matched_mutation = m
+                detail["time_diff_mutation_receipt_sec"] = int(diff_mutation_receipt)
+                detail["matched_mutation_id"] = m.id
+                break
 
-            if matched_mutation is None:
-                detail["keterangan"] = (
-                    f"Mutasi tidak ditemukan / waktu tidak berdekatan: "
-                    f"tidak ada dana masuk Rp {total_tagihan:,} dalam rentang ±{self.tolerance}s"
-                )
-                return False, "PELANGGARAN_MUTASI_NIHIL", detail
-
+        if matched_mutation is not None:
             # Klaim mutasi agar tidak bisa double spend
             self.store.claim(matched_mutation.id)
             return True, "OK_REKONSILIASI_MUTASI", detail
 
-        # Jika require_mutation=False, cukup validasi timestamp struk + nominal
-        return True, "OK_STRUK_VALID", detail
+        # Jika mutasi belum ditemukan di rekening:
+        if self.require_mutation:
+            detail["keterangan"] = (
+                f"Mutasi tidak ditemukan / waktu tidak berdekatan: "
+                f"tidak ada dana masuk Rp {total_tagihan:,} dalam rentang ±{self.tolerance}s"
+            )
+            return False, "PELANGGARAN_MUTASI_NIHIL", detail
+
+        # Jika require_mutation=False: Struk valid secara visual, tapi mutasi bank belum fix
+        detail["keterangan"] = "Struk valid secara visual, namun mutasi bank belum terkonfirmasi masuk"
+        return True, "PENDING_MUTASI", detail
 
 
 def verify_midtrans_signature(

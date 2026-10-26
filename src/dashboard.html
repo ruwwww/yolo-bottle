@@ -120,9 +120,10 @@
         </div>
 
         <!-- Filter Buttons -->
-        <div class="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 self-start sm:self-auto">
+        <div class="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 self-start sm:self-auto flex-wrap">
           <button onclick="setFilter('ALL')" id="filter-ALL" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition bg-slate-800 text-white shadow">Semua</button>
-          <button onclick="setFilter('OK')" id="filter-OK" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition text-slate-400 hover:text-white">Lunas</button>
+          <button onclick="setFilter('LUNAS')" id="filter-LUNAS" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition text-slate-400 hover:text-white">Lunas (Mutasi Fix)</button>
+          <button onclick="setFilter('PENDING')" id="filter-PENDING" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition text-slate-400 hover:text-white">Pending Mutasi</button>
           <button onclick="setFilter('FRAUD')" id="filter-FRAUD" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition text-slate-400 hover:text-white">Pelanggaran</button>
           <button onclick="setFilter('TIMEOUT')" id="filter-TIMEOUT" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition text-slate-400 hover:text-white">Timeout</button>
         </div>
@@ -356,14 +357,17 @@
     function updateKPIs(sessions) {
       const total = sessions.length;
       let okCount = 0;
+      let pendingCount = 0;
       let fraudCount = 0;
       let revenue = 0;
 
       sessions.forEach(s => {
         const st = (s.status || '').toUpperCase();
-        if (st === 'OK') {
+        if (st.includes('LUNAS') || st.includes('OK_REKONSILIASI') || st.includes('VERIFIED')) {
           okCount++;
           revenue += Number(s.harga_minuman || s.dibayar || 0);
+        } else if (st.includes('PENDING') || st === 'OK' || st.includes('OK_STRUK_VALID')) {
+          pendingCount++;
         } else if (st.includes('PELANGGARAN')) {
           fraudCount++;
         }
@@ -381,12 +385,20 @@
       const tbody = document.getElementById('sessions-table-body');
       let filtered = allSessions;
 
-      if (currentFilter === 'OK') {
-        filtered = allSessions.filter(s => (s.status || '').toUpperCase() === 'OK');
+      if (currentFilter === 'LUNAS') {
+        filtered = allSessions.filter(s => {
+          const st = (s.status || '').toUpperCase();
+          return st.includes('LUNAS') || st.includes('OK_REKONSILIASI') || st.includes('VERIFIED');
+        });
+      } else if (currentFilter === 'PENDING') {
+        filtered = allSessions.filter(s => {
+          const st = (s.status || '').toUpperCase();
+          return st.includes('PENDING') || st === 'OK' || st.includes('OK_STRUK_VALID');
+        });
       } else if (currentFilter === 'FRAUD') {
         filtered = allSessions.filter(s => (s.status || '').toUpperCase().includes('PELANGGARAN'));
       } else if (currentFilter === 'TIMEOUT') {
-        filtered = allSessions.filter(s => (s.status || '').toUpperCase() === 'TIMEOUT');
+        filtered = allSessions.filter(s => (s.status || '').toUpperCase().includes('TIMEOUT'));
       }
 
       document.getElementById('table-count').innerText = filtered.length;
@@ -401,14 +413,18 @@
         const status = s.status || '-';
         let badgeClass = 'badge-timeout';
         let statusLabel = status;
+        const stUpper = status.toUpperCase();
 
-        if (status === 'OK') {
+        if (stUpper.includes('LUNAS: TERVERIFIKASI') || stUpper === 'OK_REKONSILIASI_MUTASI') {
           badgeClass = 'badge-ok';
-          statusLabel = 'LUNAS (OK)';
-        } else if (status.includes('PELANGGARAN')) {
+          statusLabel = 'LUNAS (MUTASI FIX)';
+        } else if (stUpper.includes('PENDING') || status === 'OK' || stUpper.includes('OK_STRUK_VALID')) {
+          badgeClass = 'bg-amber-500/10 text-amber-400 border border-amber-500/30';
+          statusLabel = 'PENDING (STRUK VALID)';
+        } else if (stUpper.includes('PELANGGARAN')) {
           badgeClass = 'badge-fraud';
           statusLabel = status.replace('PELANGGARAN:', '').replace('PELANGGARAN', 'FRAUD').trim();
-        } else if (status === 'TIMEOUT') {
+        } else if (stUpper.includes('TIMEOUT')) {
           badgeClass = 'badge-timeout';
         }
 
@@ -495,10 +511,14 @@
       let badgeClass = 'badge-timeout';
       let statusLabel = status;
 
-      if (status === 'OK') {
+      const stUpper = status.toUpperCase();
+      if (stUpper.includes('LUNAS: TERVERIFIKASI') || stUpper === 'OK_REKONSILIASI_MUTASI') {
         badgeClass = 'badge-ok';
-        statusLabel = 'LUNAS (TERVERIFIKASI)';
-      } else if (status.includes('PELANGGARAN')) {
+        statusLabel = 'LUNAS TERVERIFIKASI (MUTASI BANK MATCH)';
+      } else if (stUpper.includes('PENDING') || status === 'OK' || stUpper.includes('OK_STRUK_VALID')) {
+        badgeClass = 'bg-amber-500/10 text-amber-400 border border-amber-500/30';
+        statusLabel = 'PENDING (STRUK VALID - MENUNGGU MUTASI BANK)';
+      } else if (stUpper.includes('PELANGGARAN')) {
         badgeClass = 'badge-fraud';
         statusLabel = status.replace('PELANGGARAN:', '').replace('PELANGGARAN', 'FRAUD').trim();
       }
