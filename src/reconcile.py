@@ -184,8 +184,26 @@ class MutationStore:
         with self._lock:
             if m_id in self._mutations and not self._mutations[m_id].claimed:
                 self._mutations[m_id].claimed = True
+                self._persist_all()
                 return True
             return False
+
+    def _persist_all(self):
+        try:
+            lines = []
+            for m in self._mutations.values():
+                row = {
+                    "id": m.id,
+                    "amount": m.amount,
+                    "timestamp": m.timestamp.isoformat(),
+                    "source": m.source,
+                    "ref": m.ref,
+                    "claimed": m.claimed,
+                }
+                lines.append(json.dumps(row))
+            self.log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception as exc:
+            print(f"[mutasi] Gagal rewrite log mutasi: {exc}")
 
     def list_recent(self, window_seconds: int = 3600) -> list[Mutation]:
         cutoff = datetime.now() - timedelta(seconds=window_seconds)

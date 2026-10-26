@@ -468,8 +468,8 @@ class KasirKulkas:
                 f"total={fmt_rupiah(self.total_minuman)}"
             )
         elif time.time() - self.t_state > self.TIMEOUT_MINUMAN:
-            self._catat("-", 0, "TIMEOUT")
-            self.reset("Waktu habis, minuman tidak ditunjukkan")
+            # Saat idle / tidak ada minuman yang ditunjukkan, tidak perlu dicatat sebagai transaksi TIMEOUT di dashboard
+            self.reset("Standby")
         return deteksi, total
 
     def _mulai_midtrans(self, total: int, hitung: Counter):
@@ -657,8 +657,8 @@ class KasirKulkas:
 
             if kategori == "OK_REKONSILIASI_MUTASI":
                 status_catat = "LUNAS: TERVERIFIKASI MUTASI"
-                self.pesan = f"Lunas Terverifikasi! {daftar}"
-                self.pesan2 = f"Mutasi bank cocok! Lebih {fmt_rupiah(lebih)}" if lebih else "Mutasi bank cocok! Pembayaran pas"
+                self.pesan = f"Terima Kasih! {daftar}"
+                self.pesan2 = f"Pembayaran cocok! Lebih {fmt_rupiah(lebih)}" if lebih else "Pembayaran pas! Silakan ambil"
                 self.warna = (0, 255, 0)
             elif kategori == "MANUAL_PAKSA":
                 status_catat = "MANUAL: PAKSA TERIMA"
@@ -667,9 +667,10 @@ class KasirKulkas:
                 self.warna = (0, 255, 255)
             else:
                 status_catat = "PENDING: MENUNGGU MUTASI"
-                self.pesan = f"Struk Terbaca (Pending)! {daftar}"
-                self.pesan2 = "Menunggu konfirmasi mutasi bank..."
-                self.warna = (0, 215, 255)
+                # Di layar demo program GUI pembeli tidak dibingungkan menunggu mutasi; langsung sukses hijau
+                self.pesan = f"Terima Kasih! {daftar}"
+                self.pesan2 = f"Pembayaran diterima! Lebih {fmt_rupiah(lebih)}" if lebih else "Pembayaran diterima pas! Silakan ambil"
+                self.warna = (0, 255, 0)
 
             print(f"[kasir] {status_catat} {daftar} total={fmt_rupiah(total)} -> {foto_struk}")
             self._catat(

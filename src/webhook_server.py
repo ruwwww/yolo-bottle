@@ -37,6 +37,98 @@ TRANSAKSI_CSV_PATH = ROOT / "transaksi.csv"
 PELANGGARAN_DIR = ROOT / "pelanggaran"
 
 
+def reconcile_pending_transactions(store: MutationStore, tolerance_seconds: int = 180) -> int:
+    """Mencari transaksi berstatus PENDING di transaksi.csv yang cocok dengan mutasi masuk.
+    Jika cocok, status transaksi diupdate menjadi 'LUNAS: TERVERIFIKASI MUTASI ({m.id})'
+    dan mutasi ditandai claimed.
+    """
+    if not TRANSAKSI_CSV_PATH.exists():
+        return 0
+
+    resolved_count = 0
+    try:
+        rows = []
+        fieldnames = None
+        with TRANSAKSI_CSV_PATH.open("r", encoding="utf-8", errors="replace") as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+            for r in reader:
+                rows.append(r)
+
+        clean_fieldnames = [fn for fn in (fieldnames or []) if fn is not None]
+        if not clean_fieldnames:
+            clean_fieldnames = [
+                "waktu", "referensi", "dibayar", "minuman", "harga_minuman",
+                "status", "foto", "foto_minuman", "foto_pelanggaran"
+            ]
+        elif "foto_pelanggaran" not in clean_fieldnames:
+            clean_fieldnames.append("foto_pelanggaran")
+
+        changed = False
+        recent_mutations = store.list_recent(window_seconds=86400)
+
+        for r in rows:
+            st = (r.get("status") or "").strip().upper()
+            if not st.startswith("PENDING"):
+                continue
+
+            t_str = (r.get("waktu") or "").strip()
+            try:
+                tx_dt = datetime.strptime(t_str, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                continue
+
+            tot_raw = r.get("harga_minuman") or r.get("total") or "0"
+            try:
+                total_tagihan = int(float(tot_raw))
+            except Exception:
+                total_tagihan = 0
+
+            # Cari mutasi yang cocok
+            for m in recent_mutations:
+                if m.claimed:
+                    continue
+                if m.amount < total_tagihan:
+                    continue
+
+                diff_sec = abs((m.timestamp - tx_dt).total_seconds())
+                if diff_sec <= tolerance_seconds:
+                    store.claim(m.id)
+                    r["status"] = f"LUNAS: TERVERIFIKASI MUTASI ({m.id})"
+                    changed = True
+                    resolved_count += 1
+                    print(f"[reconcile] Transaksi {t_str} (Rp {total_tagihan:,}) TERVERIFIKASI oleh mutasi {m.id} (selisih {int(diff_sec)}s)")
+
+                    try:
+                        from db import DB_PATH, get_connection
+                        if DB_PATH.exists():
+                            conn = get_connection()
+                            conn.execute(
+                                "UPDATE transactions SET status = ?, matched_mutation_id = ? WHERE timestamp = ?",
+                                (f"LUNAS: TERVERIFIKASI MUTASI ({m.id})", m.id, t_str),
+                            )
+                            conn.execute(
+                                "UPDATE mutations SET is_claimed = 1 WHERE id = ?",
+                                (m.id,),
+                            )
+                            conn.commit()
+                            conn.close()
+                    except Exception:
+                        pass
+                    break
+
+        if changed:
+            with TRANSAKSI_CSV_PATH.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=clean_fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(rows)
+
+    except Exception as exc:
+        print(f"[reconcile] Error auto-reconcile: {exc}")
+
+    return resolved_count
+
+
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
@@ -98,6 +190,9 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
         # 3. API Sesi Transaksi (dari transaksi.csv)
         if self.path.startswith("/api/sessions"):
+            # Auto-reconcile transaksi pending jika ada mutasi yang baru masuk
+            reconcile_pending_transactions(self.store)
+
             sessions = []
             if TRANSAKSI_CSV_PATH.exists():
                 try:
@@ -228,7 +323,9 @@ class WebhookHandler(BaseHTTPRequestHandler):
                     raw=payload,
                 )
                 print(f"[webhook] Mutasi Midtrans MASUK: {order_id} - Rp {nominal:,} (status: {tx_status})")
-                self._send_json(200, {"status": "ok", "mutation_id": m.id, "amount": m.amount})
+                # Auto-refer & reconcile transaksi pending yang sedang menunggu mutasi ini
+                resolved = reconcile_pending_transactions(self.store)
+                self._send_json(200, {"status": "ok", "mutation_id": m.id, "amount": m.amount, "resolved_sessions": resolved})
                 return
 
             print(f"[webhook] Notifikasi Midtrans diterima tapi belum settlement: {order_id} ({tx_status})")
@@ -247,7 +344,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
             m = self.store.add(m_id=m_id, amount=amount, source=source, ref=ref, raw=payload)
             print(f"[webhook] Mutasi Manual MASUK: {m_id} - Rp {amount:,} (ref: {ref})")
-            self._send_json(200, {"status": "ok", "mutation_id": m.id, "amount": m.amount})
+            resolved = reconcile_pending_transactions(self.store)
+            self._send_json(200, {"status": "ok", "mutation_id": m.id, "amount": m.amount, "resolved_sessions": resolved})
             return
 
         self._send_json(404, {"error": "Not Found"})
