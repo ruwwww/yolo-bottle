@@ -62,7 +62,7 @@ Sistem dilengkapi dengan **Dashboard Web Admin Realtime** yang dapat dibuka di b
 Fitur Dashboard Admin:
 1. **Live KPI Cards**: Menampilkan Total Sesi Transaksi, Transaksi Lunas Terverifikasi, Persentase Fraud/Pelanggaran, dan Total Pendapatan Tercatat.
 2. **Tabel Sesi Transaksi**: Daftar seluruh transaksi kasir lengkap dengan filter (*Semua*, *Lunas*, *Pelanggaran*, *Timeout*).
-3. **Modal Viewer Capture Foto**: Admin dapat mengklik tombol **Foto** pada baris transaksi untuk melihat foto resolusi penuh wajah pembeli dan struk yang ditunjukkan.
+3. **Dual Preview Modal (Foto Minuman & Bukti Struk TF)**: Admin dapat mengklik tombol **Minuman**, **Bukti TF**, atau **Inspeksi** untuk melihat foto perbandingan botol minuman hasil deteksi YOLO dan foto struk transfer hasil tangkapan webcam secara berdampingan (*side-by-side*).
 4. **Feed Mutasi Masuk**: Menampilkan riwayat dana yang masuk via Midtrans / Bank secara transparan beserta status klaim mutasi.
 5. **Auto-Refresh (Live Sync)**: Dashboard otomatis melakukan sinkronisasi data setiap 2 detik tanpa perlu me-reload halaman.
 

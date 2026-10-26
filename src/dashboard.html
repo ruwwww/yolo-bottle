@@ -139,7 +139,7 @@
               <th class="py-3.5 px-4">Dibayar</th>
               <th class="py-3.5 px-4">Status & Alasan</th>
               <th class="py-3.5 px-4">Referensi</th>
-              <th class="py-3.5 px-4 text-center">Capture Foto</th>
+              <th class="py-3.5 px-4 text-center">Capture Foto (Minuman & Struk)</th>
             </tr>
           </thead>
           <tbody id="sessions-table-body" class="divide-y divide-slate-800/60 font-normal">
@@ -187,19 +187,89 @@
 
   </main>
 
-  <!-- Image Modal Popup -->
-  <div id="image-modal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm hidden flex items-center justify-center p-4" onclick="closeModal()">
-    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl relative" onclick="event.stopPropagation()">
-      <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
-        <h3 id="modal-title" class="text-sm font-semibold text-white">Capture Bukti Transaksi</h3>
-        <button onclick="closeModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800">
+  <!-- Image Modal Popup (Dual Preview Minuman & Bukti Transfer) -->
+  <div id="image-modal" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden flex items-center justify-center p-3 sm:p-6" onclick="closeModal()">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-5xl w-full overflow-hidden shadow-2xl relative flex flex-col max-h-[92vh]" onclick="event.stopPropagation()">
+      <!-- Modal Header -->
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+        <div class="flex items-center gap-3">
+          <div class="p-2 rounded-lg bg-indigo-500/10 text-indigo-400">
+            <i data-lucide="scan-eye" class="w-5 h-5"></i>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h3 class="text-sm sm:text-base font-bold text-white">Inspeksi Sesi Transaksi</h3>
+              <span id="modal-status-badge" class="px-2 py-0.5 rounded text-xs font-semibold"></span>
+            </div>
+            <p id="modal-time-desc" class="text-xs text-slate-400 mt-0.5"></p>
+          </div>
+        </div>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-slate-800 transition">
           <i data-lucide="x" class="w-5 h-5"></i>
         </button>
       </div>
-      <div class="p-4 flex items-center justify-center bg-black/50">
-        <img id="modal-img" src="" alt="Capture" class="max-h-[70vh] rounded-lg object-contain shadow-md">
+
+      <!-- Modal Body: 2 Kolom Side-by-Side -->
+      <div class="p-4 sm:p-6 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-4 flex-1">
+        <!-- Kolom Kiri: Scan Botol Minuman -->
+        <div class="flex flex-col bg-slate-950/60 rounded-xl border border-slate-800 overflow-hidden">
+          <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
+            <div class="flex items-center gap-2">
+              <i data-lucide="cup-soda" class="w-4 h-4 text-emerald-400"></i>
+              <span class="text-xs font-bold text-white uppercase tracking-wider">1. Scan Minuman (YOLO)</span>
+            </div>
+            <span id="modal-minuman-tag" class="text-xs text-emerald-400 font-medium"></span>
+          </div>
+          <div class="p-3 flex items-center justify-center min-h-[240px] max-h-[380px] bg-black/60 relative">
+            <img id="modal-img-minuman" src="" alt="Scan Minuman" class="max-h-[360px] w-auto max-w-full rounded-lg object-contain shadow cursor-pointer transition hover:scale-[1.02]" onclick="openFullImage(this.src)" title="Klik untuk lihat ukuran asli di tab baru">
+            <div id="modal-no-minuman" class="hidden text-center text-slate-500 p-6 flex flex-col items-center">
+              <i data-lucide="image-off" class="w-8 h-8 mb-2 stroke-1 text-slate-600"></i>
+              <span class="text-xs">Foto botol minuman tidak tersedia</span>
+            </div>
+          </div>
+          <div class="p-3 bg-slate-900/30 border-t border-slate-800 text-xs flex justify-between items-center text-slate-400">
+            <span>Tagihan Minuman:</span>
+            <span id="modal-bill-val" class="font-mono font-bold text-white"></span>
+          </div>
+        </div>
+
+        <!-- Kolom Kanan: Bukti Transfer / Layar Struk -->
+        <div class="flex flex-col bg-slate-950/60 rounded-xl border border-slate-800 overflow-hidden">
+          <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
+            <div class="flex items-center gap-2">
+              <i data-lucide="receipt" class="w-4 h-4 text-cyan-400"></i>
+              <span class="text-xs font-bold text-white uppercase tracking-wider">2. Bukti Transfer (OCR Layar)</span>
+            </div>
+            <span id="modal-ref-tag" class="text-xs font-mono text-cyan-400"></span>
+          </div>
+          <div class="p-3 flex items-center justify-center min-h-[240px] max-h-[380px] bg-black/60 relative">
+            <img id="modal-img-struk" src="" alt="Bukti Transfer" class="max-h-[360px] w-auto max-w-full rounded-lg object-contain shadow cursor-pointer transition hover:scale-[1.02]" onclick="openFullImage(this.src)" title="Klik untuk lihat ukuran asli di tab baru">
+            <div id="modal-no-struk" class="hidden text-center text-slate-500 p-6 flex flex-col items-center">
+              <i data-lucide="image-off" class="w-8 h-8 mb-2 stroke-1 text-slate-600"></i>
+              <span class="text-xs">Foto bukti transfer tidak tersedia</span>
+            </div>
+          </div>
+          <div class="p-3 bg-slate-900/30 border-t border-slate-800 text-xs flex justify-between items-center text-slate-400">
+            <span>Nominal Terbaca:</span>
+            <span id="modal-paid-val" class="font-mono font-bold text-emerald-400"></span>
+          </div>
+        </div>
       </div>
-      <div class="p-3 bg-slate-950/80 border-t border-slate-800 text-xs text-slate-400 text-center" id="modal-desc"></div>
+
+      <!-- Modal Footer -->
+      <div class="p-4 bg-slate-950/90 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+        <div id="modal-reconcile-note" class="text-slate-400 flex items-center gap-2">
+          <!-- Dinamis diisi js -->
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="modal-btn-view-minuman" onclick="" class="hidden px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition">
+            Buka Foto Minuman
+          </button>
+          <button id="modal-btn-view-struk" onclick="" class="hidden px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition">
+            Buka Foto Struk
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -301,6 +371,7 @@
       }
 
       tbody.innerHTML = filtered.map(s => {
+        const originalIndex = allSessions.indexOf(s);
         const status = s.status || '-';
         let badgeClass = 'badge-timeout';
         let statusLabel = status;
@@ -315,16 +386,29 @@
           badgeClass = 'badge-timeout';
         }
 
-        const foto = s.foto || '';
-        let fotoBtn = '<span class="text-xs text-slate-600">-</span>';
-        if (foto) {
-          const filename = foto.split(/[\\\\/]/).pop();
-          fotoBtn = `
-            <button onclick="openModal('${filename}', '${s.waktu}', '${statusLabel}')" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-cyan-400 border border-slate-700 hover:border-cyan-500/50 transition">
-              <i data-lucide="image" class="w-3.5 h-3.5"></i>
-              <span>Foto</span>
+        const fotoStruk = s.foto || '';
+        const fotoMinuman = s.foto_minuman || '';
+        const hasMinuman = Boolean(fotoMinuman);
+        const hasStruk = Boolean(fotoStruk);
+
+        let fotoControls = `
+          <div class="flex items-center justify-center gap-1.5">
+            <button onclick="openModal(${originalIndex})" title="${hasMinuman ? 'Lihat Foto Minuman' : 'Foto minuman belum tersedia'}" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition ${hasMinuman ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800/30 text-slate-600 border border-slate-800 cursor-not-allowed'}" ${!hasMinuman ? 'disabled' : ''}>
+              <i data-lucide="cup-soda" class="w-3.5 h-3.5"></i>
+              <span>Minuman</span>
             </button>
-          `;
+            <button onclick="openModal(${originalIndex})" title="${hasStruk ? 'Lihat Bukti Transfer' : 'Bukti transfer belum tersedia'}" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition ${hasStruk ? 'bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' : 'bg-slate-800/30 text-slate-600 border border-slate-800 cursor-not-allowed'}" ${!hasStruk ? 'disabled' : ''}>
+              <i data-lucide="receipt" class="w-3.5 h-3.5"></i>
+              <span>Bukti TF</span>
+            </button>
+            <button onclick="openModal(${originalIndex})" title="Inspeksi Kedua Foto Berdampingan" class="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition">
+              <i data-lucide="split" class="w-3.5 h-3.5"></i>
+            </button>
+          </div>
+        `;
+
+        if (!hasMinuman && !hasStruk) {
+          fotoControls = '<span class="text-xs text-slate-600">-</span>';
         }
 
         return `
@@ -339,7 +423,7 @@
               </span>
             </td>
             <td class="py-3 px-4 font-mono text-xs text-slate-400">${s.referensi || '-'}</td>
-            <td class="py-3 px-4 text-center">${fotoBtn}</td>
+            <td class="py-3 px-4 text-center">${fotoControls}</td>
           </tr>
         `;
       }).join('');
@@ -372,17 +456,98 @@
       }).join('');
     }
 
-    function openModal(filename, waktu, status) {
-      const modal = document.getElementById('image-modal');
-      const img = document.getElementById('modal-img');
-      const title = document.getElementById('modal-title');
-      const desc = document.getElementById('modal-desc');
+    function openModal(index) {
+      const s = allSessions[index];
+      if (!s) return;
 
-      img.src = '/photos/' + filename;
-      title.innerText = 'Bukti Capture: ' + status;
-      desc.innerText = 'Waktu Transaksi: ' + waktu + ' | File: ' + filename;
+      const modal = document.getElementById('image-modal');
+      const status = s.status || '-';
+      let badgeClass = 'badge-timeout';
+      let statusLabel = status;
+
+      if (status === 'OK') {
+        badgeClass = 'badge-ok';
+        statusLabel = 'LUNAS (TERVERIFIKASI)';
+      } else if (status.includes('PELANGGARAN')) {
+        badgeClass = 'badge-fraud';
+        statusLabel = status.replace('PELANGGARAN:', '').replace('PELANGGARAN', 'FRAUD').trim();
+      }
+
+      // Update Header
+      const badgeElem = document.getElementById('modal-status-badge');
+      badgeElem.className = 'px-2 py-0.5 rounded text-xs font-semibold ' + badgeClass;
+      badgeElem.innerText = statusLabel;
+      document.getElementById('modal-time-desc').innerText = `Waktu Transaksi: ${s.waktu} | No. Referensi: ${s.referensi || '-'}`;
+
+      // 1. Minuman
+      const fotoMinuman = s.foto_minuman || '';
+      const imgMinuman = document.getElementById('modal-img-minuman');
+      const noMinuman = document.getElementById('modal-no-minuman');
+      const btnViewMinuman = document.getElementById('modal-btn-view-minuman');
+      document.getElementById('modal-minuman-tag').innerText = s.minuman || '-';
+      document.getElementById('modal-bill-val').innerText = fmtRupiah(s.harga_minuman);
+
+      if (fotoMinuman) {
+        const fnMinuman = fotoMinuman.split(/[\\\\/]/).pop();
+        const srcMinuman = '/photos/' + fnMinuman;
+        imgMinuman.src = srcMinuman;
+        imgMinuman.classList.remove('hidden');
+        noMinuman.classList.add('hidden');
+        btnViewMinuman.classList.remove('hidden');
+        btnViewMinuman.onclick = () => window.open(srcMinuman, '_blank');
+      } else {
+        imgMinuman.src = '';
+        imgMinuman.classList.add('hidden');
+        noMinuman.classList.remove('hidden');
+        btnViewMinuman.classList.add('hidden');
+      }
+
+      // 2. Bukti Transfer / Layar Struk
+      const fotoStruk = s.foto || '';
+      const imgStruk = document.getElementById('modal-img-struk');
+      const noStruk = document.getElementById('modal-no-struk');
+      const btnViewStruk = document.getElementById('modal-btn-view-struk');
+      document.getElementById('modal-ref-tag').innerText = s.referensi ? `Ref: ${s.referensi}` : '-';
+      document.getElementById('modal-paid-val').innerText = fmtRupiah(s.dibayar);
+
+      if (fotoStruk) {
+        const fnStruk = fotoStruk.split(/[\\\\/]/).pop();
+        const srcStruk = '/photos/' + fnStruk;
+        imgStruk.src = srcStruk;
+        imgStruk.classList.remove('hidden');
+        noStruk.classList.add('hidden');
+        btnViewStruk.classList.remove('hidden');
+        btnViewStruk.onclick = () => window.open(srcStruk, '_blank');
+      } else {
+        imgStruk.src = '';
+        imgStruk.classList.add('hidden');
+        noStruk.classList.remove('hidden');
+        btnViewStruk.classList.add('hidden');
+      }
+
+      // Reconcile note footer
+      const noteElem = document.getElementById('modal-reconcile-note');
+      const diff = Number(s.dibayar || 0) - Number(s.harga_minuman || 0);
+      let diffNote = '';
+      if (diff === 0 && Number(s.harga_minuman) > 0) {
+        diffNote = '<span class="text-emerald-400 font-semibold">Uang pas (Rp 0 selisih)</span>';
+      } else if (diff > 0) {
+        diffNote = `<span class="text-teal-400 font-semibold">Lebih bayar +${fmtRupiah(diff)}</span>`;
+      } else if (diff < 0) {
+        diffNote = `<span class="text-rose-400 font-semibold">Kurang bayar ${fmtRupiah(Math.abs(diff))}</span>`;
+      }
+
+      noteElem.innerHTML = `
+        <i data-lucide="info" class="w-4 h-4 text-slate-500"></i>
+        <span>Tagihan Kasir: <strong class="text-white">${fmtRupiah(s.harga_minuman)}</strong> &bull; Nominal Bayar: <strong class="text-white">${fmtRupiah(s.dibayar)}</strong> (${diffNote})</span>
+      `;
+
       modal.classList.remove('hidden');
       lucide.createIcons();
+    }
+
+    function openFullImage(src) {
+      if (src) window.open(src, '_blank');
     }
 
     function closeModal() {

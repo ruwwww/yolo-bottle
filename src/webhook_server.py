@@ -104,7 +104,24 @@ class WebhookHandler(BaseHTTPRequestHandler):
                     with TRANSAKSI_CSV_PATH.open(encoding="utf-8", errors="replace") as f:
                         reader = csv.DictReader(f)
                         for row in reader:
-                            sessions.append(dict(row))
+                            item = dict(row)
+                            foto_struk = item.get("foto", "") or ""
+                            foto_minuman = item.get("foto_minuman", "") or ""
+
+                            # Smart inference jika foto_minuman belum ada di CSV lama
+                            if not foto_minuman and foto_struk:
+                                f_stem = Path(foto_struk).stem
+                                for suffix in ("_full", "_ok", "_ok_struk"):
+                                    if f_stem.endswith(suffix):
+                                        base_ts = f_stem[:-len(suffix)]
+                                        for cand_name in (f"{base_ts}_minuman.jpg", f"{base_ts}_ok_minuman.jpg"):
+                                            cand_path = PELANGGARAN_DIR / cand_name
+                                            if cand_path.exists():
+                                                foto_minuman = str(cand_path)
+                                                break
+                                        break
+                            item["foto_minuman"] = foto_minuman
+                            sessions.append(item)
                     # Urutkan dari yang paling baru
                     sessions.reverse()
                 except Exception as exc:

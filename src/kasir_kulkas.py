@@ -260,25 +260,51 @@ class KasirKulkas:
 
         threading.Thread(target=_b, daemon=True).start()
 
-    def _catat(self, minuman: str, total: int, status: str, foto: str = ""):
+    def _catat(self, minuman: str, total: int, status: str, foto: str = "", foto_minuman: str = ""):
         baru = not self.log.exists()
+        now_dt = datetime.now()
+        now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
         with self.log.open("a", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             if baru:
                 w.writerow(
-                    ["waktu", "referensi", "dibayar", "minuman", "harga_minuman", "status", "foto"]
+                    ["waktu", "referensi", "dibayar", "minuman", "harga_minuman", "status", "foto", "foto_minuman"]
                 )
             w.writerow(
                 [
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    now_str,
                     self.ref,
                     self.dibayar,
                     minuman,
                     total,
                     status,
                     foto,
+                    foto_minuman,
                 ]
             )
+
+        # Catat juga ke SQLite database kulkas.db secara asinkron/aman
+        try:
+            from db import record_transaction
+
+            reason = ""
+            if "PELANGGARAN" in status:
+                parts = status.split(":", 1)
+                reason = parts[1].strip() if len(parts) > 1 else "PELANGGARAN"
+            tx_id = f"TX_{now_dt.strftime('%Y%m%d_%H%M%S')}"
+            record_transaction(
+                tx_id=tx_id,
+                timestamp=now_str,
+                total_amount=total,
+                paid_amount=self.dibayar,
+                status=status,
+                fraud_reason=reason,
+                reference_no=self.ref,
+                photo_full_path=foto,
+                photo_item_path=foto_minuman,
+            )
+        except Exception as exc:
+            pass
 
     def _ocr(self, frame, gen):
         try:
@@ -588,7 +614,7 @@ class KasirKulkas:
             self._bunyi()
             status_log = f"PELANGGARAN: {alasan}" if alasan else "PELANGGARAN"
             print(f"[kasir] {status_log} {daftar} total={fmt_rupiah(total)} -> {foto}")
-            self._catat(daftar, total, status_log, str(foto))
+            self._catat(daftar, total, status_log, str(foto), str(foto_minuman) if foto_minuman else "")
             self._kirim_telegram(
                 foto_minuman or foto, foto, daftar, total, max(0, total - self.dibayar),
                 catatan=f"Alasan: {alasan}" if alasan else ""
@@ -598,11 +624,15 @@ class KasirKulkas:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             foto = self.folder / f"{ts}_ok.jpg"
             cv2.imwrite(str(foto), frame)
+            foto_minuman = None
+            if frame_minuman is not None:
+                foto_minuman = self.folder / f"{ts}_ok_minuman.jpg"
+                cv2.imwrite(str(foto_minuman), frame_minuman)
             self.pesan = f"Terima kasih! {daftar}"
             self.pesan2 = f"Lebih bayar {fmt_rupiah(lebih)}" if lebih else "Pembayaran pas"
             self.warna = (0, 255, 0)
             print(f"[kasir] OK {daftar} total={fmt_rupiah(total)} -> {foto}")
-            self._catat(daftar, total, "OK", str(foto))
+            self._catat(daftar, total, "OK", str(foto), str(foto_minuman) if foto_minuman else "")
 
     def _kirim_telegram(self, foto, foto_bayar, daftar, total, kurang, catatan: str = ""):
         bot = self.telegram

@@ -142,6 +142,72 @@ def init_db(db_path: Path | None = None, fresh: bool = False) -> None:
     conn.close()
 
 
+def record_transaction(
+    tx_id: str,
+    timestamp: str,
+    total_amount: int,
+    paid_amount: int,
+    status: str,
+    fraud_reason: str = "",
+    reference_no: str = "",
+    photo_full_path: str = "",
+    photo_item_path: str = "",
+    items: list[tuple[str, int, int]] | None = None,
+    db_path: Path | None = None,
+) -> None:
+    """Mencatat sesi transaksi lengkap beserta foto barang & struk ke SQLite."""
+    conn = get_connection(db_path)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT OR REPLACE INTO transactions (
+            id, timestamp, total_amount, paid_amount, status,
+            fraud_reason, reference_no, photo_full_path, photo_item_path
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            tx_id,
+            timestamp,
+            total_amount,
+            paid_amount,
+            status,
+            fraud_reason,
+            reference_no,
+            photo_full_path,
+            photo_item_path,
+        ),
+    )
+    if items:
+        for p_name, qty, unit_price in items:
+            cur.execute(
+                """
+                INSERT INTO transaction_items (transaction_id, product_name, qty, unit_price, subtotal)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (tx_id, p_name, qty, unit_price, qty * unit_price),
+            )
+    if "PELANGGARAN" in status:
+        cur.execute(
+            """
+            INSERT INTO fraud_logs (
+                transaction_id, violation_type, detected_at,
+                amount_bill, amount_paid, photo_proof_path, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tx_id,
+                fraud_reason or "PELANGGARAN",
+                timestamp,
+                total_amount,
+                paid_amount,
+                photo_full_path or photo_item_path,
+                f"Referensi: {reference_no}",
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+
 def reset_to_fresh_state(archive: bool = True) -> dict:
     """Kembalikan seluruh data sistem ke Titik Nol (Fresh State) yang bersih untuk demo."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
