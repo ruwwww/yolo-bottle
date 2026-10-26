@@ -13,15 +13,27 @@ Contoh:
 """
 from __future__ import annotations
 
+import argparse
 import html
 import json
 import mimetypes
 import os
+import sys
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 from urllib import parse, request
+
+# Load environment variable jika ada modul common
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from common import load_env
+
+    load_env()
+except Exception:
+    pass
 
 TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 CHAT_ENV = "TELEGRAM_CHAT_ID"
@@ -45,6 +57,26 @@ def _multipart(fields: dict[str, str], files: dict[str, tuple[str, bytes, str]])
     return boundary, b"".join(parts)
 
 
+def update_env(key: str, value: str, env_path: Path | None = None) -> Path:
+    """Tulis / perbarui nilai konfigurasi ke file .env."""
+    p = env_path or (Path(__file__).resolve().parents[1] / ".env")
+    lines: list[str] = []
+    found = False
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            clean = line.strip()
+            if clean.startswith(f"{key}=") or clean == key:
+                lines.append(f"{key}={value}")
+                found = True
+            else:
+                lines.append(line)
+    if not found:
+        lines.append(f"{key}={value}")
+    p.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+    os.environ[key] = value
+    return p
+
+
 class TelegramBot:
     def __init__(self, token: str = "", chat_id: str = "", timeout: float = 25.0):
         self.token = (token or os.environ.get(TOKEN_ENV, "")).strip()
@@ -60,6 +92,46 @@ class TelegramBot:
     @property
     def _api(self) -> str:
         return f"https://api.telegram.org/bot{self.token}"
+
+    def get_me(self) -> dict | None:
+        """Cek validitas bot token dan ambil profil bot."""
+        if not self.token:
+            self.last_error = "token belum diisi"
+            return None
+        try:
+            req = request.Request(f"{self._api}/getMe")
+            with request.urlopen(req, timeout=self.timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            if payload.get("ok"):
+                return payload.get("result")
+            self.last_error = str(payload.get("description") or "gagal getMe")
+            return None
+        except Exception as exc:
+            self.last_error = str(exc)
+            return None
+
+    def get_updates(self, offset: int | None = None, timeout: int = 0) -> list[dict]:
+        """Ambil update pesan masuk ke bot."""
+        if not self.token:
+            self.last_error = "token belum diisi"
+            return []
+        try:
+            params: dict[str, str] = {}
+            if offset is not None:
+                params["offset"] = str(offset)
+            if timeout > 0:
+                params["timeout"] = str(timeout)
+            qs = f"?{parse.urlencode(params)}" if params else ""
+            req = request.Request(f"{self._api}/getUpdates{qs}")
+            with request.urlopen(req, timeout=max(self.timeout, timeout + 5)) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            if payload.get("ok"):
+                return payload.get("result", [])
+            self.last_error = str(payload.get("description") or "gagal getUpdates")
+            return []
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
 
     def _call(
         self,
@@ -139,14 +211,133 @@ class TelegramBot:
         if kurang is None:
             kurang = max(0, int(total) - int(dibayar))
         lines = [
-            "<b>PELANGGARAN KASIR KULKAS</b>",
-            f"Waktu: {(waktu or datetime.now()).strftime('%Y-%m-%d %H:%M:%S')}",
-            f"Minuman: {html.escape(str(minuman))}",
-            f"Total: Rp {int(total):,}".replace(",", "."),
-            f"Dibayar: Rp {int(dibayar):,}".replace(",", "."),
-            f"Kurang: Rp {int(kurang):,}".replace(",", "."),
-            f"Ref: {html.escape(str(referensi))}",
+            "⚠️ <b>PELANGGARAN KASIR KULKAS</b>",
+            f"📅 Waktu: {(waktu or datetime.now()).strftime('%Y-%m-%d %H:%M:%S')}",
+            f"🥤 Minuman: {html.escape(str(minuman))}",
+            f"💰 Total: Rp {int(total):,}".replace(",", "."),
+            f"💵 Dibayar: Rp {int(dibayar):,}".replace(",", "."),
+            f"❌ Kurang: Rp {int(kurang):,}".replace(",", "."),
+            f"🔖 Ref: {html.escape(str(referensi))}",
         ]
         if catatan:
-            lines.append(f"Catatan: {html.escape(catatan)}")
+            lines.append(f"📝 Catatan: {html.escape(catatan)}")
         return self.send_photo(photo, "\n".join(lines))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Utilitas Bot Telegram Kasir Kulkas")
+    parser.add_argument("--info", action="store_true", help="Cek status bot & chat ID saat ini")
+    parser.add_argument("--test", nargs="?", const="Kasir Kulkas: tes koneksi bot Telegram berhasil! 🚀",
+                        help="Kirim pesan uji ke chat ID yang dikonfigurasi")
+    parser.add_argument("--test-photo", help="Kirim foto uji ke chat ID")
+    parser.add_argument("--listen", action="store_true",
+                        help="Tunggu pesan baru (/start) untuk otomatis mendeteksi dan menyimpan CHAT_ID ke .env")
+    parser.add_argument("--set-chat", help="Simpan chat ID baru ke file .env")
+    args = parser.parse_args()
+
+    bot = TelegramBot()
+
+    if args.set_chat:
+        update_env(CHAT_ENV, args.set_chat.strip())
+        print(f"[telegram] TELEGRAM_CHAT_ID berhasil diupdate ke: {args.set_chat.strip()}")
+        return 0
+
+    if args.listen:
+        print("[telegram] Memeriksa koneksi bot...")
+        me = bot.get_me()
+        if not me:
+            print(f"[telegram] Gagal menghubungi bot: {bot.last_error}")
+            return 1
+        username = me.get("username", "bot")
+        print(f"[telegram] Terhubung ke bot @{username} ('{me.get('first_name')}')")
+        print(f"[telegram] Silakan buka Telegram, cari @{username} (https://t.me/{username}),")
+        print("[telegram] lalu tekan tombol START atau kirim pesan apa saja...")
+
+        found_chat = None
+        user_name = ""
+        # Cek update terbaru
+        updates = bot.get_updates()
+        if updates:
+            last = updates[-1]
+            msg = last.get("message") or last.get("edited_message") or {}
+            chat = msg.get("chat", {})
+            if chat.get("id"):
+                found_chat = str(chat["id"])
+                user_name = chat.get("first_name") or chat.get("username") or str(found_chat)
+
+        if not found_chat:
+            start_t = time.time()
+            while time.time() - start_t < 60:
+                time.sleep(2)
+                sys.stdout.write(".")
+                sys.stdout.flush()
+                updates = bot.get_updates()
+                if updates:
+                    last = updates[-1]
+                    msg = last.get("message") or last.get("edited_message") or {}
+                    chat = msg.get("chat", {})
+                    if chat.get("id"):
+                        found_chat = str(chat["id"])
+                        user_name = chat.get("first_name") or chat.get("username") or str(found_chat)
+                        print("")
+                        break
+            if not found_chat:
+                print("\n[telegram] Batas waktu 60 detik habis. Belum ada pesan masuk.")
+                return 1
+
+        print(f"[telegram] Pesan terdeteksi dari: {user_name} (Chat ID: {found_chat})")
+        update_env(CHAT_ENV, found_chat)
+        print(f"[telegram] Disimpan ke .env: TELEGRAM_CHAT_ID={found_chat}")
+        bot.chat_id = found_chat
+        ok = bot.send_message(
+            f"✅ <b>Koneksi Berhasil!</b>\n"
+            f"Halo {html.escape(user_name)}, bot kasir kulkas sekarang terhubung ke chat ini.\n"
+            f"Notifikasi pelanggaran kasir akan dikirimkan ke sini."
+        )
+        if ok:
+            print("[telegram] Pesan konfirmasi telah dikirim ke Telegram!")
+        else:
+            print(f"[telegram] Gagal mengirim konfirmasi: {bot.last_error}")
+        return 0
+
+    if args.test_photo:
+        if not bot.enabled:
+            print("[telegram] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID belum diisi lengkap.")
+            return 1
+        print(f"[telegram] Mengirim foto '{args.test_photo}' ke chat {bot.chat_id}...")
+        ok = bot.send_photo(args.test_photo, caption="📸 Kasir Kulkas: tes pengiriman foto")
+        print("[telegram] Foto tes:", "BERHASIL" if ok else f"GAGAL - {bot.last_error}")
+        return 0 if ok else 1
+
+    if args.test is not None:
+        if not bot.enabled:
+            print("[telegram] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID belum diisi lengkap.")
+            return 1
+        print(f"[telegram] Mengirim pesan tes ke chat {bot.chat_id}...")
+        ok = bot.send_message(args.test)
+        print("[telegram] Pesan tes:", "BERHASIL" if ok else f"GAGAL - {bot.last_error}")
+        return 0 if ok else 1
+
+    # Default / --info
+    print("=== Status Integrasi Telegram Bot ===")
+    me = bot.get_me()
+    if me:
+        print(f"Bot Status  : ONLINE")
+        print(f"Bot Name    : {me.get('first_name')}")
+        print(f"Bot Username: @{me.get('username')}")
+        print(f"Bot ID      : {me.get('id')}")
+    else:
+        print(f"Bot Status  : ERROR ({bot.last_error})")
+    print(f"Token Config: {'TERPASANG' if bot.token else 'KOSONG'}")
+    print(f"Chat ID     : {bot.chat_id or 'BELUM DIISI'}")
+    print(f"Notifikasi  : {'AKTIF' if bot.enabled else 'TIDAK AKTIF (perlu token + chat_id)'}")
+    print("=====================================")
+    print("Perintah yang tersedia:")
+    print("  python src/telegram_notify.py --test            (kirim pesan uji)")
+    print("  python src/telegram_notify.py --listen          (deteksi chat id otomatis)")
+    print("  python src/telegram_notify.py --set-chat <id>   (simpan chat id manual)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -158,7 +158,7 @@ agar keduanya benar-benar terdeteksi:
 
 ```powershell
 .\scripts\6_capture_kelas.ps1     # tombol 4 = teh_pucuk, 5 = golda; 50-150 frame/produk
-.\scripts\9_label_moondream.ps1
+.\scripts\9_label_moondream.ps1 -Classes teh_pucuk,golda   # hanya kelas baru
 .\scripts\7_train_kelas.ps1
 ```
 
@@ -178,17 +178,29 @@ Kontrol: `r` reset, `s` simpan manual, `q` keluar. Opsi penting: `--conf`,
 
 ### Notifikasi pelanggaran ke Telegram
 
-Buat bot lewat `@BotFather`, isi `TELEGRAM_BOT_TOKEN` dan `TELEGRAM_CHAT_ID` di
-`.env` (chat id bisa dilihat dari `getUpdates`), lalu jalankan seperti biasa.
-Saat pelanggaran, foto minuman + foto bukti bayar dikirim ke chat tersebut
-beserta total, nominal dibayar, kekurangan, dan referensi transaksi.
+Token dan chat tujuan disimpan di `.env` (jangan commit file ini):
+```env
+TELEGRAM_BOT_TOKEN=<token-dari-BotFather>
+TELEGRAM_CHAT_ID=<chat-id>
+```
 
+Saat pelanggaran kasir terjadi, foto minuman + bukti bayar otomatis dikirim ke chat tersebut beserta detail total, nominal dibayar, kekurangan, dan referensi transaksi.
+
+**Cek status & tes pengiriman:**
 ```powershell
+.\scripts\12_telegram_bot.ps1 -Info
+.\scripts\12_telegram_bot.ps1 -Test
+# atau langsung:
 .venv\Scripts\python.exe src\kasir_kulkas.py --telegram-test
 ```
 
-Matikan dengan `--no-telegram`; override cepat lewat `--telegram-token` /
-`--telegram-chat`.
+Jika ingin menghubungkan ke chat/akun lain secara otomatis:
+```powershell
+.\scripts\12_telegram_bot.ps1 -Listen
+```
+Kirim pesan `/start` ke bot `@tekber_bot` di Telegram, script akan otomatis mendeteksi Chat ID dan menyimpannya ke `.env`.
+
+Matikan notifikasi saat menjalankan kasir dengan `--no-telegram`; atau override lewat `--telegram-token` / `--telegram-chat`.
 
 ## Backend Moondream (opsional, deteksi realtime)
 

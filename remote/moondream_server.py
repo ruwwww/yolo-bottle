@@ -8,6 +8,8 @@ Endpoint:
   POST /detect {"image": base64_jpg,
                 "prompt": "bottle",
                 "resize": 960}       -> {"objects": [{x_min,y_min,x_max,y_max,label}], "ms": 42}
+  POST /caption {"image": ..., "length": "normal"} -> {"caption": ..., "ms": ...}
+  POST /query   {"image": ..., "question": "..."}  -> {"answer": ..., "ms": ...}
 """
 from __future__ import annotations
 
@@ -40,6 +42,26 @@ class DetectReq(BaseModel):
     label: str = ""
 
 
+class ImageReq(BaseModel):
+    image: str
+
+
+class CaptionReq(ImageReq):
+    length: str = "normal"
+
+
+class QueryReq(ImageReq):
+    question: str = "What is in this image?"
+
+
+def _decode(image_b64: str) -> Image.Image:
+    try:
+        raw = base64.b64decode(image_b64, validate=True)
+        return Image.open(io.BytesIO(raw)).convert("RGB")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"gambar tidak valid: {exc}") from exc
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "model": MODEL_ID, "uptime": round(time.time() - _t0, 1)}
@@ -47,11 +69,7 @@ def health():
 
 @app.post("/detect")
 def detect(req: DetectReq):
-    try:
-        raw = base64.b64decode(req.image, validate=True)
-        img = Image.open(io.BytesIO(raw)).convert("RGB")
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"gambar tidak valid: {exc}") from exc
+    img = _decode(req.image)
 
     if req.resize and max(img.size) > req.resize:
         scale = req.resize / max(img.size)
@@ -71,3 +89,29 @@ def detect(req: DetectReq):
         for o in out.get("objects", [])
     ]
     return {"objects": objs, "ms": round(ms, 1), "prompt": req.prompt, "size": list(img.size)}
+
+
+@app.post("/caption")
+def caption(req: CaptionReq):
+    img = _decode(req.image)
+    t = time.time()
+    with _lock:
+        out = model.caption(img, length=req.length)
+    return {
+        "caption": out.get("caption", ""),
+        "ms": round((time.time() - t) * 1000, 1),
+        "size": list(img.size),
+    }
+
+
+@app.post("/query")
+def query(req: QueryReq):
+    img = _decode(req.image)
+    t = time.time()
+    with _lock:
+        out = model.query(img, req.question)
+    return {
+        "answer": out.get("answer", ""),
+        "ms": round((time.time() - t) * 1000, 1),
+        "size": list(img.size),
+    }

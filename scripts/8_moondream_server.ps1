@@ -17,12 +17,13 @@ ssh $SshHost "cd ~/yolo-bottle && (nohup ~/.conda/envs/ai/bin/python -m uvicorn 
 Write-Host "menunggu model siap (load ~35 s)..."
 for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Seconds 2
-    try {
-        $h = Invoke-RestMethod -Uri "http://${SshHost}:$Port/health" -TimeoutSec 2
+    $raw = ssh $SshHost "curl -s --max-time 2 http://127.0.0.1:$Port/health" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $raw -match '"ok"\s*:\s*true') {
+        $h = $raw | ConvertFrom-Json
         Write-Host "OK: model=$($h.model) uptime=$($h.uptime)s"
         if ($Log) { ssh $SshHost "tail -n 20 ~/md_setup/server.log" }
         exit 0
-    } catch { }
+    }
 }
 Write-Host "gagal: server tidak merespon di ${SshHost}:$Port"
 ssh $SshHost "tail -n 30 ~/md_setup/server.log"
