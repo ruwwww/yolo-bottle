@@ -231,3 +231,37 @@ cloudflared.exe tunnel run --token <token-cloudflared-anda>
    - Sistem mendeteksi ID mutasi / referensi struk sudah berstatus `claimed == True`.
    - Layar merah: **`PERINGATAN! DOUBLE SPEND`**.
    - Dilaporkan ke Telegram.
+
+---
+
+## 8. Arsitektur Database & Reset ke Fresh State (Titik 0)
+
+Untuk keperluan operasional persisten, pelaporan, dan kemudahan demo berulang, sistem dilengkapi dengan manajemen database SQLite (`kulkas.db`) dan mekanisme reset **Fresh State**.
+
+### 8.1 Skema Database SQLite (`kulkas.db`)
+Database beroperasi dengan mode `WAL` (Write-Ahead Logging) agar aman diakses secara konkuren oleh kasir, webhook server, dan dashboard:
+- `products`: Katalog produk, harga, dan stok awal (tersinkronisasi dari `menu.csv`).
+- `transactions`: Log sesi transaksi kasir (status `OK`/`PELANGGARAN`, nominal belanja, nominal struk, waktu kasir, path foto bukti).
+- `transaction_items`: Item minuman yang dibeli dalam tiap sesi.
+- `mutations`: Log seluruh dana masuk dari webhook Midtrans/manual.
+- `fraud_logs`: Catatan investigasi fraud (alasan pelanggaran, bukti foto, status rekonsiliasi).
+
+### 8.2 Cara Mengembalikan Sistem ke Fresh State (Reset Titik 0)
+Sebelum melakukan demo baru atau pengujian dosen/auditor, Anda dapat mengosongkan seluruh data uji coba tanpa kehilangan data lama (data lama otomatis diarsipkan):
+
+```powershell
+# Reset sistem ke kondisi fresh (data lama otomatis di-backup ke archive/backup_YYYYMMDD_HHMMSS)
+powershell -ExecutionPolicy Bypass -File scripts\15_reset_fresh_state.ps1
+
+# Atau gunakan Python langsung
+.venv\Scripts\python.exe src\db.py --fresh
+```
+
+Aksi yang dilakukan saat Fresh State:
+1. Membuat snapshot cadangan di `archive/backup_<timestamp>/`.
+2. Memindahkan semua foto di folder `pelanggaran/` ke folder arsip.
+3. Mengosongkan file `transaksi.csv` (hanya menyisakan header kolom).
+4. Mengosongkan file `mutasi.jsonl` (0 baris).
+5. Me-reset tabel `transactions`, `transaction_items`, `mutations`, `fraud_logs` di `kulkas.db` menjadi 0 data.
+6. Menyinkronkan ulang master produk dari `menu.csv`.
+
