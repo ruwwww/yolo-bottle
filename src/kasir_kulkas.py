@@ -121,8 +121,10 @@ class KasirKulkas:
         md_resize=960, telegram=True, telegram_token="", telegram_chat="",
         midtrans=True, midtrans_server="", midtrans_client="", midtrans_merchant="",
         webhook=True, webhook_port=8091, tolerance_sec=180, require_mutation=False,
+        timeout_bayar=60,
     ):
         tune_threads()
+        self.TIMEOUT_BAYAR = max(5, timeout_bayar)
         self.menu = menu
         self.detector = detector
         self.md: MoondreamEngine | None = None
@@ -565,9 +567,9 @@ class KasirKulkas:
             )
             self._ocr_thread.start()
         if self.state == "BAYAR" and time.time() - self.t_state > self.TIMEOUT_BAYAR:
-            print("[kasir] bukti bayar tidak ditunjukkan; dianggap pelanggaran")
+            print(f"[kasir] batas waktu {self.TIMEOUT_BAYAR}s habis; bukti bayar tidak ditunjukkan -> PELANGGARAN")
             self.dibayar = 0
-            self._evaluasi(frame, self.hitung, self.frame_minuman)
+            self._evaluasi(frame, self.hitung, self.frame_minuman, alasan="TIMEOUT_BAYAR_EXPIRED")
 
     def _stabil(self) -> tuple[bool, Counter]:
         """Suara mayoritas: kelas sama & jumlah tiap kelas tidak goyah >1 tiap frame."""
@@ -635,7 +637,9 @@ class KasirKulkas:
                 foto_pelanggaran=str(foto_pelanggaran),
             )
             self._kirim_telegram(
-                foto_pelanggaran, foto_struk or foto_pelanggaran, daftar, total, max(0, total - self.dibayar),
+                str(foto_pelanggaran),
+                str(foto_struk) if foto_struk else str(foto_pelanggaran),
+                daftar, total, max(0, total - self.dibayar),
                 catatan=f"Alasan: {alasan}" if alasan else ""
             )
         else:
@@ -646,7 +650,8 @@ class KasirKulkas:
                 foto_minuman = self.folder / f"{ts}_ok_minuman.jpg"
                 cv2.imwrite(str(foto_minuman), frame_minuman)
 
-            frame_bukti = getattr(self, "frame_struk", None) or frame
+            frame_struk = getattr(self, "frame_struk", None)
+            frame_bukti = frame_struk if frame_struk is not None else frame
             foto_struk = self.folder / f"{ts}_ok_struk.jpg"
             cv2.imwrite(str(foto_struk), frame_bukti)
 
@@ -711,11 +716,19 @@ class KasirKulkas:
             if self.kandidat and not deteksi:
                 sub = f"{len(self.kandidat)} kandidat, menunggu konfirmasi..."
         elif self.state == "BAYAR":
+            sisa_sec = max(0.0, self.TIMEOUT_BAYAR - (time.time() - self.t_state))
             judul = (
                 f"2. Total {fmt_rupiah(self.total_minuman)} - "
-                "tunjukkan BUKTI BAYAR (layar HP)"
+                f"BUKTI BAYAR [Sisa: {int(sisa_sec)}s]"
             )
-            sub = self.pesan or "scan QRIS lalu tunjukkan struk"
+            if sisa_sec <= 15:
+                sub = f"PERINGATAN! Waktu habis dlm {int(sisa_sec)}s -> PELANGGARAN!"
+                self.warna = (0, 0, 255) if int(time.time() * 3) % 2 == 0 else (0, 140, 255)
+            elif sisa_sec <= 30:
+                sub = f"Sisa waktu bayar: {int(sisa_sec)}s sebelum dicatat pelanggaran"
+                self.warna = (0, 180, 255)
+            else:
+                sub = self.pesan or "Scan QRIS Midtrans / hadapkan struk ke kamera"
             if self.engine is None:
                 sub = "OCR menyiapkan... " + sub
         else:
@@ -724,6 +737,32 @@ class KasirKulkas:
         cv2.putText(tampil, judul[:80], (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
                     self.warna if self.state == "HASIL" else (255, 255, 255), 2)
         cv2.putText(tampil, sub[:90], (10, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.55, self.warna, 1)
+
+        # Progress bar countdown expirasi di bawah header atas (y: 74-82) saat tahap BAYAR
+        if self.state == "BAYAR":
+            sisa_sec = max(0.0, self.TIMEOUT_BAYAR - (time.time() - self.t_state))
+            pct = max(0.0, min(1.0, sisa_sec / self.TIMEOUT_BAYAR))
+            bar_w = int(w * pct)
+            if sisa_sec > 30:
+                bar_color = (0, 220, 90)
+            elif sisa_sec > 15:
+                bar_color = (0, 215, 255)
+            else:
+                bar_color = (0, 0, 255) if int(time.time() * 4) % 2 == 0 else (0, 50, 220)
+
+            cv2.rectangle(tampil, (0, 74), (w, 82), (35, 35, 35), -1)
+            if bar_w > 0:
+                cv2.rectangle(tampil, (0, 74), (bar_w, 82), bar_color, -1)
+            cv2.putText(
+                tampil,
+                f"Expirasi: {int(sisa_sec)}s",
+                (w - 145, 70),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                bar_color,
+                1,
+                cv2.LINE_AA,
+            )
         cv2.putText(
             tampil, f"{self.fps:4.1f} FPS", (w - 120, 30),
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 235, 255), 2,
@@ -778,6 +817,9 @@ class KasirKulkas:
         cv2.rectangle(tampil, (0, h - 58), (w, h), (20, 20, 20), -1)
         kiri = f"Total: {fmt_rupiah(total)}"
         kanan = f"Dibayar: {fmt_rupiah(self.dibayar) if self.dibayar else '-'}   ref {self.ref}"
+        if self.state == "BAYAR":
+            sisa_sec = max(0.0, self.TIMEOUT_BAYAR - (time.time() - self.t_state))
+            kanan += f"   |   Batas Waktu: {int(sisa_sec)}s"
         cv2.putText(tampil, kiri, (10, h - 34), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 235, 255), 2)
         cv2.putText(tampil, kanan, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (200, 200, 200), 1)
         cv2.putText(tampil, "r=reset  spasi=paksa  s=simpan  q=keluar", (w - 330, h - 10),
@@ -862,6 +904,7 @@ def main() -> int:
     ap.add_argument("--min-area", type=float, default=0.01, help="area kotak minimum (fraksi frame)")
     ap.add_argument("--min-confirm", type=int, default=3, help="minimal kemunculan sebelum dihitung")
     ap.add_argument("--confirm-sec", type=float, default=0.35, help="lama objek harus bertahan (detik)")
+    ap.add_argument("--timeout-bayar", type=int, default=60, help="batas waktu bayar (detik) sebelum pelanggaran")
     ap.add_argument("--cam-width", type=int, default=960)
     ap.add_argument("--cam-height", type=int, default=540)
     ap.add_argument(
@@ -967,6 +1010,7 @@ def main() -> int:
         webhook_port=args.webhook_port,
         tolerance_sec=args.tolerance_sec,
         require_mutation=args.require_mutation,
+        timeout_bayar=args.timeout_bayar,
     )
     threading.Thread(target=kasir.preload_ocr, daemon=True, name="preload-ocr").start()
 
