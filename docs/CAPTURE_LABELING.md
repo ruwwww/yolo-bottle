@@ -25,21 +25,25 @@ dan laptop bisa offline. Label baru dibuat saat langkah 2 di server.
 | 1      | `bottle`         | `bottle`                         | `water bottle`, `plastic bottle` |
 | 2      | `ballpoint_box`  | `ballpoint box`                  | `pen box`, `box of pens`       |
 | 3      | `computer_mouse` | `computer mouse`                 | `mouse`, `wireless mouse`      |
+| 4      | `teh_pucuk`      | `teh pucuk bottle`               | `teh pucuk`, `iced tea bottle` |
+| 5      | `golda`          | `golda coffee bottle`            | `golda coffee`, `coffee bottle` |
 
-Urutan di `dataset/capture/classes.txt` = **class-id YOLO** (0, 1, 2). Jangan
-diubah setelah ada label. Prompt ada di `dataset/capture/prompts.txt` dan boleh
-diedit kapan saja sebelum labeling.
+Urutan di `dataset/capture/classes.txt` = **class-id YOLO** (0, 1, 2, 3, 4).
+Jangan diubah setelah ada label. Prompt ada di `dataset/capture/prompts.txt`
+dan boleh diedit kapan saja sebelum labeling.
 
 ## Struktur folder
 
 ```
 dataset/capture/
-  classes.txt            # bottle / ballpoint_box / computer_mouse
-  prompts.txt            # bottle=bottle, ballpoint_box=ballpoint box, ...
+  classes.txt            # bottle / ballpoint_box / computer_mouse / teh_pucuk / golda
+  prompts.txt            # bottle=bottle, teh_pucuk=teh pucuk bottle, ...
   manifest.csv           # file, kelas, waktu, source, frame
   bottle/frame_*.jpg
   ballpoint_box/frame_*.jpg
   computer_mouse/frame_*.jpg
+  teh_pucuk/frame_*.jpg
+  golda/frame_*.jpg
 
 dataset/raw/             # hasil labeling (YOLO)
   classes.txt
@@ -51,14 +55,15 @@ dataset/raw/             # hasil labeling (YOLO)
 ## 1. Capture (laptop + webcam)
 
 ```powershell
-.venv\Scripts\python.exe src\collect_dataset.py --classes bottle,ballpoint_box,computer_mouse
+.venv\Scripts\python.exe src\collect_dataset.py --classes bottle,ballpoint_box,computer_mouse,teh_pucuk,golda
 # atau pintasan:
 .\scripts\6_capture_kelas.ps1
 ```
 
 Tombol saat jendela capture aktif:
 
-- `1` / `2` / `3` → simpan frame **saat itu** ke `capture/<kelas>/`.
+- `1`..`5` → simpan frame **saat itu** ke `capture/<kelas>/`
+  (`4` = `teh_pucuk`, `5` = `golda`).
 - `spasi` → simpan ulang dengan kelas terakhir.
 - `a` → auto-save on/off (mis. tiap 1 detik).
 - `q` / `ESC` → keluar.
@@ -131,7 +136,7 @@ Server GPU diatur dengan:
 ```powershell
 .venv\Scripts\python.exe src\split_dataset.py --keep-empty
 .venv\Scripts\python.exe src\train_remote.py --dataset dataset `
-  --names bottle,ballpoint_box,computer_mouse `
+  --names bottle,ballpoint_box,computer_mouse,teh_pucuk,golda `
   --model yolo11s.pt --epochs 100 --out weights\multiclass_best.pt
 ```
 

@@ -3,12 +3,12 @@
 Capture (lokal, tanpa model) dan labeling (GPU) terpisah total:
 
     # 1. capture di laptop (frame mentah, tanpa label)
-    python src/collect_dataset.py --classes bottle,ballpoint_box,computer_mouse
+    python src/collect_dataset.py --classes bottle,ballpoint_box,computer_mouse,teh_pucuk,golda
     # 2. upload + label di GPU + unduh label
     python src/label_remote.py
     # 3. split + training
     python src/split_dataset.py --keep-empty
-    python src/train_remote.py --dataset dataset --names bottle,ballpoint_box,computer_mouse
+    python src/train_remote.py --dataset dataset --names bottle,ballpoint_box,computer_mouse,teh_pucuk,golda
 
 Contoh lain:
     python src/label_remote.py --limit 5            # uji cepat 5 gambar/kelas

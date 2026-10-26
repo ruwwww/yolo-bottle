@@ -12,8 +12,8 @@ Struktur output:
 
 Contoh:
     python src/collect_dataset.py
-    python src/collect_dataset.py --classes bottle,ballpoint_box,computer_mouse
-    python src/collect_dataset.py --source video.mp4 --auto-save 1 --class bottle
+    python src/collect_dataset.py --classes bottle,ballpoint_box,computer_mouse,teh_pucuk,golda
+    python src/collect_dataset.py --source video.mp4 --auto-save 1 --class golda
 
 Lanjutkan: python src/label_remote.py  (lihat docs/CAPTURE_LABELING.md)
 """
@@ -34,7 +34,12 @@ from common import ROOT, add_root_to_path, ensure_dirs, open_capture
 
 add_root_to_path()
 
-DEFAULT_CLASSES = "bottle,ballpoint_box,computer_mouse"
+DEFAULT_CLASSES = "bottle,ballpoint_box,computer_mouse,teh_pucuk,golda"
+
+PROMPT_HINTS = {
+    "teh_pucuk": "teh pucuk bottle",
+    "golda": "golda coffee bottle",
+}
 
 
 def parse_classes(text: str) -> list[str]:
@@ -42,7 +47,7 @@ def parse_classes(text: str) -> list[str]:
 
 
 def default_prompts(classes: list[str]) -> dict[str, str]:
-    return {c: c.replace("_", " ") for c in classes}
+    return {c: PROMPT_HINTS.get(c, c.replace("_", " ")) for c in classes}
 
 
 def parse_prompts(text: str) -> dict[str, str]:

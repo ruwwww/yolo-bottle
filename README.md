@@ -66,7 +66,7 @@ Copy-Item .env.example .env
 ```powershell
 .\scripts\6_capture_kelas.ps1
 # sama dengan:
-.venv\Scripts\python.exe src\collect_dataset.py --classes bottle,ballpoint_box,computer_mouse
+.venv\Scripts\python.exe src\collect_dataset.py --classes bottle,ballpoint_box,computer_mouse,teh_pucuk,golda
 ```
 
 - Tombol `1..9` menyimpan frame saat itu ke kelas tersebut, `spasi` simpan kelas
@@ -146,7 +146,23 @@ kelas,nama,harga
 bottle,Air Mineral,3000
 ballpoint_box,Kotak Pulpen,15000
 computer_mouse,Mouse Komputer,50000
+teh_pucuk,Teh Pucuk,4000
+golda,Golda,4500
 ```
+
+### Menambah kelas minuman (`teh_pucuk` & `golda`)
+
+Kedua kelas sudah terdaftar di `menu.csv`, default capture, dan prompt labeling.
+Weight `multiclass_best.pt` yang ada masih 3 kelas, jadi perlu capture + retrain
+agar keduanya benar-benar terdeteksi:
+
+```powershell
+.\scripts\6_capture_kelas.ps1     # tombol 4 = teh_pucuk, 5 = golda; 50-150 frame/produk
+.\scripts\9_label_moondream.ps1
+.\scripts\7_train_kelas.ps1
+```
+
+Harga bisa diubah kapan saja di `menu.csv`.
 
 Uji tanpa webcam:
 
