@@ -243,7 +243,10 @@ def reset_to_fresh_state(archive: bool = True) -> dict:
     # 3. Reset transaksi.csv ke Header Bersih
     with TRANSAKSI_CSV_PATH.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["waktu", "referensi", "dibayar", "minuman", "harga_minuman", "status", "foto"])
+        w.writerow([
+            "waktu", "referensi", "dibayar", "minuman", "harga_minuman",
+            "status", "foto", "foto_minuman", "foto_pelanggaran"
+        ])
 
     # 4. Kosongkan mutasi.jsonl
     MUTASI_JSONL_PATH.write_text("", encoding="utf-8")
