@@ -206,6 +206,7 @@ class MutationStore:
             print(f"[mutasi] Gagal rewrite log mutasi: {exc}")
 
     def list_recent(self, window_seconds: int = 3600) -> list[Mutation]:
+        self._load_existing()
         cutoff = datetime.now() - timedelta(seconds=window_seconds)
         with self._lock:
             return [m for m in self._mutations.values() if m.timestamp >= cutoff]

@@ -525,8 +525,15 @@ class KasirKulkas:
         threading.Thread(target=_worker, daemon=True, name="midtrans").start()
 
     def _tahap_bayar(self, frame):
-        # Catatan: Kasir tetap menunggu pembeli menghadapkan layar HP (bukti transfer) ke kamera
-        # agar rekonsiliasi timestamp struk vs mutasi berjalan & foto bukti tersimpan.
+        # 1. Jika pembayaran via Midtrans Snap di layar sudah settlement, langsung lunas otomatis!
+        if getattr(self, "midtrans_paid", False):
+            self.dibayar = self.total_minuman
+            self.ref = getattr(self, "midtrans_order_id", "-")
+            print(f"[kasir] Pembayaran Midtrans Snap QR terkonfirmasi lunas otomatis: {self.ref}")
+            self._evaluasi(frame, self.hitung, self.frame_minuman, kategori="OK_REKONSILIASI_MUTASI")
+            return
+
+        # 2. Pembayaran via QRIS Statis: membaca bukti bayar di HP via OCR & rekonsiliasi mutasi
         sibuk = self._ocr_thread is not None and self._ocr_thread.is_alive()
         if not sibuk and self._ocr_result is not None:
             data, self._ocr_result = self._ocr_result, None
