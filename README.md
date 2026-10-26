@@ -220,6 +220,19 @@ Kasir kulkas terintegrasi dengan **Midtrans Payment Gateway** dan **Sistem Rekon
 
 > 📖 **Dokumentasi Lengkap:** Lihat [docs/REKONSILIASI_DAN_MIDTRANS.md](docs/REKONSILIASI_DAN_MIDTRANS.md) untuk panduan teknis mendalam dan skenario pengujian demo.
 
+### Dashboard Admin & Live Monitoring
+
+Sistem dilengkapi dashboard web realtime untuk memantau sesi transaksi, status lunas / fraud, dan inspeksi foto capture:
+- **Akses Lokal**: [http://localhost:8091/admin](http://localhost:8091/admin)
+- **Akses Publik (Cloudflare)**: [https://kulkas.ruwwww-thesis.my.id/admin](https://kulkas.ruwwww-thesis.my.id/admin)
+
+**Fitur Dashboard:**
+- Live KPI: Total Sesi, Lunas Terverifikasi, Persentase Fraud, dan Total Pendapatan.
+- Filter transaksi (*Semua*, *Lunas*, *Pelanggaran*, *Timeout*).
+- Pop-up modal foto capture untuk memeriksa foto pembeli dan bukti bayar.
+- Feed mutasi dana masuk real-time dari Midtrans / Bank.
+- Auto-refresh otomatis setiap 2 detik.
+
 **Uji coba cepat:**
 ```powershell
 # 1. Cek info koneksi Midtrans

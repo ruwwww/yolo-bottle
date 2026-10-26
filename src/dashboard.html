@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard — Kasir Kulkas Kejujuran</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    .badge-ok { background-color: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-fraud { background-color: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .badge-warn { background-color: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-timeout { background-color: rgba(156, 163, 175, 0.15); color: #9ca3af; border: 1px solid rgba(156, 163, 175, 0.3); }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
+
+  <!-- Top Navbar -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+          <i data-lucide="shield-check" class="w-6 h-6 text-white"></i>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold text-white tracking-tight leading-tight">Kasir Kulkas Kejujuran</h1>
+          <p class="text-xs text-slate-400">Admin Monitoring & Fraud Detection Dashboard</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <!-- Live Status Indicator -->
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-medium">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>Live Sync</span>
+        </div>
+        
+        <!-- Auto Refresh Toggle -->
+        <button id="toggle-refresh" onclick="toggleAutoRefresh()" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 transition border border-slate-700">
+          <i data-lucide="refresh-cw" id="refresh-icon" class="w-3.5 h-3.5"></i>
+          <span id="refresh-label">Auto-Refresh: ON</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+    <!-- KPI Summary Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- Total Transaksi -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 hover:border-slate-700 transition">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Sesi</span>
+          <div class="p-2 rounded-lg bg-blue-500/10 text-blue-400">
+            <i data-lucide="shopping-bag" class="w-5 h-5"></i>
+          </div>
+        </div>
+        <div class="mt-4 flex items-baseline gap-2">
+          <span id="kpi-total" class="text-3xl font-extrabold text-white">0</span>
+          <span class="text-xs text-slate-400">transaksi</span>
+        </div>
+      </div>
+
+      <!-- Berhasil Lunas -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 hover:border-slate-700 transition">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Lunas Terverifikasi</span>
+          <div class="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
+            <i data-lucide="check-circle-2" class="w-5 h-5"></i>
+          </div>
+        </div>
+        <div class="mt-4 flex items-baseline gap-2">
+          <span id="kpi-ok" class="text-3xl font-extrabold text-emerald-400">0</span>
+          <span id="kpi-ok-pct" class="text-xs text-emerald-500/80 font-medium">0%</span>
+        </div>
+      </div>
+
+      <!-- Fraud / Pelanggaran -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 hover:border-slate-700 transition">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Pelanggaran / Fraud</span>
+          <div class="p-2 rounded-lg bg-rose-500/10 text-rose-400">
+            <i data-lucide="alert-triangle" class="w-5 h-5"></i>
+          </div>
+        </div>
+        <div class="mt-4 flex items-baseline gap-2">
+          <span id="kpi-fraud" class="text-3xl font-extrabold text-rose-400">0</span>
+          <span id="kpi-fraud-pct" class="text-xs text-rose-500/80 font-medium">0%</span>
+        </div>
+      </div>
+
+      <!-- Total Pendapatan -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 hover:border-slate-700 transition">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Pendapatan</span>
+          <div class="p-2 rounded-lg bg-amber-500/10 text-amber-400">
+            <i data-lucide="wallet" class="w-5 h-5"></i>
+          </div>
+        </div>
+        <div class="mt-4">
+          <span id="kpi-revenue" class="text-2xl font-extrabold text-amber-400">Rp 0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sessions Section -->
+    <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+      <!-- Section Header & Filters -->
+      <div class="p-5 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-lg font-bold text-white flex items-center gap-2">
+            <span>Sesi Pembayaran Kasir</span>
+            <span id="table-count" class="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">0</span>
+          </h2>
+          <p class="text-xs text-slate-400 mt-0.5">Daftar transaksi, verifikasi scan OCR struk, dan status fraud real-time</p>
+        </div>
+
+        <!-- Filter Buttons -->
+        <div class="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 self-start sm:self-auto">
+          <button onclick="setFilter('ALL')" id="filter-ALL" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition bg-slate-800 text-white shadow">Semua</button>
+          <button onclick="setFilter('OK')" id="filter-OK" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition text-slate-400 hover:text-white">Lunas</button>
+          <button onclick="setFilter('FRAUD')" id="filter-FRAUD" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition text-slate-400 hover:text-white">Pelanggaran</button>
+          <button onclick="setFilter('TIMEOUT')" id="filter-TIMEOUT" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition text-slate-400 hover:text-white">Timeout</button>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm text-slate-300">
+          <thead class="bg-slate-950/60 text-xs uppercase font-semibold text-slate-400 border-b border-slate-800">
+            <tr>
+              <th class="py-3.5 px-4">Waktu</th>
+              <th class="py-3.5 px-4">Barang / Minuman</th>
+              <th class="py-3.5 px-4">Tagihan</th>
+              <th class="py-3.5 px-4">Dibayar</th>
+              <th class="py-3.5 px-4">Status & Alasan</th>
+              <th class="py-3.5 px-4">Referensi</th>
+              <th class="py-3.5 px-4 text-center">Capture Foto</th>
+            </tr>
+          </thead>
+          <tbody id="sessions-table-body" class="divide-y divide-slate-800/60 font-normal">
+            <tr>
+              <td colspan="7" class="py-8 text-center text-slate-500">Memuat data transaksi...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Mutasi Feed Section -->
+    <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+      <div class="p-5 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
+            <i data-lucide="radio" class="w-5 h-5"></i>
+          </div>
+          <div>
+            <h2 class="text-base font-bold text-white">Feed Mutasi Masuk (Midtrans / Bank)</h2>
+            <p class="text-xs text-slate-400">Data uang masuk real-time dari webhook port 8091</p>
+          </div>
+        </div>
+        <span id="mutation-count" class="text-xs px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700">0 Mutasi</span>
+      </div>
+      <div class="p-5 overflow-x-auto">
+        <table class="w-full text-left text-xs text-slate-300">
+          <thead class="bg-slate-950/60 text-slate-400 uppercase font-semibold border-b border-slate-800">
+            <tr>
+              <th class="py-2.5 px-3">Waktu Masuk</th>
+              <th class="py-2.5 px-3">Order / Mutation ID</th>
+              <th class="py-2.5 px-3">Nominal Masuk</th>
+              <th class="py-2.5 px-3">Sumber</th>
+              <th class="py-2.5 px-3">Status Klaim</th>
+            </tr>
+          </thead>
+          <tbody id="mutations-table-body" class="divide-y divide-slate-800/40">
+            <tr>
+              <td colspan="5" class="py-6 text-center text-slate-500">Belum ada mutasi masuk</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Image Modal Popup -->
+  <div id="image-modal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm hidden flex items-center justify-center p-4" onclick="closeModal()">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl relative" onclick="event.stopPropagation()">
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+        <h3 id="modal-title" class="text-sm font-semibold text-white">Capture Bukti Transaksi</h3>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+      <div class="p-4 flex items-center justify-center bg-black/50">
+        <img id="modal-img" src="" alt="Capture" class="max-h-[70vh] rounded-lg object-contain shadow-md">
+      </div>
+      <div class="p-3 bg-slate-950/80 border-t border-slate-800 text-xs text-slate-400 text-center" id="modal-desc"></div>
+    </div>
+  </div>
+
+  <script>
+    let currentFilter = 'ALL';
+    let autoRefresh = true;
+    let refreshTimer = null;
+    let allSessions = [];
+
+    function fmtRupiah(num) {
+      return 'Rp ' + Number(num || 0).toLocaleString('id-ID');
+    }
+
+    function setFilter(filter) {
+      currentFilter = filter;
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.classList.remove('bg-slate-800', 'text-white', 'shadow');
+        btn.classList.add('text-slate-400');
+      });
+      const activeBtn = document.getElementById('filter-' + filter);
+      if (activeBtn) {
+        activeBtn.classList.add('bg-slate-800', 'text-white', 'shadow');
+        activeBtn.classList.remove('text-slate-400');
+      }
+      renderSessions();
+    }
+
+    function toggleAutoRefresh() {
+      autoRefresh = !autoRefresh;
+      const label = document.getElementById('refresh-label');
+      const icon = document.getElementById('refresh-icon');
+      if (autoRefresh) {
+        label.innerText = 'Auto-Refresh: ON';
+        icon.classList.add('animate-spin');
+        setTimeout(() => icon.classList.remove('animate-spin'), 600);
+      } else {
+        label.innerText = 'Auto-Refresh: OFF';
+      }
+    }
+
+    async function loadData() {
+      try {
+        const [resSessions, resMutations] = await Promise.all([
+          fetch('/api/sessions').then(r => r.json()),
+          fetch('/api/mutations').then(r => r.json())
+        ]);
+
+        allSessions = resSessions.sessions || [];
+        updateKPIs(allSessions);
+        renderSessions();
+        renderMutations(resMutations.mutations || []);
+        lucide.createIcons();
+      } catch (err) {
+        console.error('Gagal fetch data:', err);
+      }
+    }
+
+    function updateKPIs(sessions) {
+      const total = sessions.length;
+      let okCount = 0;
+      let fraudCount = 0;
+      let revenue = 0;
+
+      sessions.forEach(s => {
+        const st = (s.status || '').toUpperCase();
+        if (st === 'OK') {
+          okCount++;
+          revenue += Number(s.harga_minuman || s.dibayar || 0);
+        } else if (st.includes('PELANGGARAN')) {
+          fraudCount++;
+        }
+      });
+
+      document.getElementById('kpi-total').innerText = total;
+      document.getElementById('kpi-ok').innerText = okCount;
+      document.getElementById('kpi-ok-pct').innerText = total ? Math.round((okCount / total) * 100) + '%' : '0%';
+      document.getElementById('kpi-fraud').innerText = fraudCount;
+      document.getElementById('kpi-fraud-pct').innerText = total ? Math.round((fraudCount / total) * 100) + '%' : '0%';
+      document.getElementById('kpi-revenue').innerText = fmtRupiah(revenue);
+    }
+
+    function renderSessions() {
+      const tbody = document.getElementById('sessions-table-body');
+      let filtered = allSessions;
+
+      if (currentFilter === 'OK') {
+        filtered = allSessions.filter(s => (s.status || '').toUpperCase() === 'OK');
+      } else if (currentFilter === 'FRAUD') {
+        filtered = allSessions.filter(s => (s.status || '').toUpperCase().includes('PELANGGARAN'));
+      } else if (currentFilter === 'TIMEOUT') {
+        filtered = allSessions.filter(s => (s.status || '').toUpperCase() === 'TIMEOUT');
+      }
+
+      document.getElementById('table-count').innerText = filtered.length;
+
+      if (!filtered.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="py-8 text-center text-slate-500">Tidak ada sesi yang cocok dengan filter</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = filtered.map(s => {
+        const status = s.status || '-';
+        let badgeClass = 'badge-timeout';
+        let statusLabel = status;
+
+        if (status === 'OK') {
+          badgeClass = 'badge-ok';
+          statusLabel = 'LUNAS (OK)';
+        } else if (status.includes('PELANGGARAN')) {
+          badgeClass = 'badge-fraud';
+          statusLabel = status.replace('PELANGGARAN:', '').replace('PELANGGARAN', 'FRAUD').trim();
+        } else if (status === 'TIMEOUT') {
+          badgeClass = 'badge-timeout';
+        }
+
+        const foto = s.foto || '';
+        let fotoBtn = '<span class="text-xs text-slate-600">-</span>';
+        if (foto) {
+          const filename = foto.split(/[\\\\/]/).pop();
+          fotoBtn = `
+            <button onclick="openModal('${filename}', '${s.waktu}', '${statusLabel}')" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-cyan-400 border border-slate-700 hover:border-cyan-500/50 transition">
+              <i data-lucide="image" class="w-3.5 h-3.5"></i>
+              <span>Foto</span>
+            </button>
+          `;
+        }
+
+        return `
+          <tr class="hover:bg-slate-900/40 transition">
+            <td class="py-3 px-4 font-mono text-xs text-slate-400">${s.waktu}</td>
+            <td class="py-3 px-4 font-medium text-white">${s.minuman || '-'}</td>
+            <td class="py-3 px-4 font-mono text-slate-300">${fmtRupiah(s.harga_minuman)}</td>
+            <td class="py-3 px-4 font-mono ${Number(s.dibayar) >= Number(s.harga_minuman) ? 'text-emerald-400' : 'text-amber-400'}">${fmtRupiah(s.dibayar)}</td>
+            <td class="py-3 px-4">
+              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold ${badgeClass}">
+                ${statusLabel}
+              </span>
+            </td>
+            <td class="py-3 px-4 font-mono text-xs text-slate-400">${s.referensi || '-'}</td>
+            <td class="py-3 px-4 text-center">${fotoBtn}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderMutations(mutations) {
+      const tbody = document.getElementById('mutations-table-body');
+      document.getElementById('mutation-count').innerText = mutations.length + ' Mutasi';
+
+      if (!mutations.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="py-6 text-center text-slate-500">Belum ada mutasi masuk</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = mutations.slice(0, 15).map(m => {
+        const isClaimed = m.claimed;
+        return `
+          <tr class="hover:bg-slate-900/30">
+            <td class="py-2.5 px-3 font-mono text-slate-400">${m.timestamp.replace('T', ' ').slice(0, 19)}</td>
+            <td class="py-2.5 px-3 font-mono text-cyan-400">${m.id}</td>
+            <td class="py-2.5 px-3 font-mono font-semibold text-emerald-400">${fmtRupiah(m.amount)}</td>
+            <td class="py-2.5 px-3 uppercase text-slate-400">${m.source || '-'}</td>
+            <td class="py-2.5 px-3">
+              <span class="px-2 py-0.5 rounded text-[11px] font-medium ${isClaimed ? 'bg-slate-800 text-slate-400' : 'bg-emerald-500/20 text-emerald-400'}">
+                ${isClaimed ? 'Sudah Diklaim' : 'Tersedia'}
+              </span>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function openModal(filename, waktu, status) {
+      const modal = document.getElementById('image-modal');
+      const img = document.getElementById('modal-img');
+      const title = document.getElementById('modal-title');
+      const desc = document.getElementById('modal-desc');
+
+      img.src = '/photos/' + filename;
+      title.innerText = 'Bukti Capture: ' + status;
+      desc.innerText = 'Waktu Transaksi: ' + waktu + ' | File: ' + filename;
+      modal.classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function closeModal() {
+      document.getElementById('image-modal').classList.add('hidden');
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeModal();
+    });
+
+    // Initial load & Polling Loop
+    loadData();
+    setInterval(() => {
+      if (autoRefresh) loadData();
+    }, 2000);
+  </script>
+</body>
+</html>

@@ -595,11 +595,14 @@ class KasirKulkas:
             )
         else:
             lebih = self.dibayar - total
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            foto = self.folder / f"{ts}_ok.jpg"
+            cv2.imwrite(str(foto), frame)
             self.pesan = f"Terima kasih! {daftar}"
             self.pesan2 = f"Lebih bayar {fmt_rupiah(lebih)}" if lebih else "Pembayaran pas"
             self.warna = (0, 255, 0)
-            print(f"[kasir] OK {daftar} total={fmt_rupiah(total)}")
-            self._catat(daftar, total, "OK")
+            print(f"[kasir] OK {daftar} total={fmt_rupiah(total)} -> {foto}")
+            self._catat(daftar, total, "OK", str(foto))
 
     def _kirim_telegram(self, foto, foto_bayar, daftar, total, kurang, catatan: str = ""):
         bot = self.telegram

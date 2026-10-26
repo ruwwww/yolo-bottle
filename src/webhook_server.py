@@ -9,7 +9,9 @@ Endpoints:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import mimetypes
 import os
 import sys
 import threading
@@ -21,14 +23,18 @@ from socketserver import ThreadingMixIn
 # Load modul reconcile & common
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from common import load_env
+    from common import ROOT, load_env
     from reconcile import MutationStore, verify_midtrans_signature
 
     load_env()
 except Exception:
+    ROOT = Path(__file__).resolve().parents[1]
     from reconcile import MutationStore, verify_midtrans_signature
 
 ENV_SERVER_KEY = "MIDTRANS_SERVER_KEY"
+DASHBOARD_HTML_PATH = Path(__file__).resolve().parent / "dashboard.html"
+TRANSAKSI_CSV_PATH = ROOT / "transaksi.csv"
+PELANGGARAN_DIR = ROOT / "pelanggaran"
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -52,18 +58,64 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_html(self, status: int, html_str: str):
+        body = html_str.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_file(self, file_path: Path, ctype: str = "image/jpeg"):
+        if not file_path.exists() or not file_path.is_file():
+            self._send_json(404, {"error": "File tidak ditemukan"})
+            return
+        data = file_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
-        if self.path == "/" or self.path.startswith("/health"):
+        # 1. Dashboard Web UI
+        if self.path in ("/", "/admin", "/dashboard"):
+            if DASHBOARD_HTML_PATH.exists():
+                self._send_html(200, DASHBOARD_HTML_PATH.read_text(encoding="utf-8"))
+            else:
+                self._send_html(200, "<h1>Dashboard HTML tidak ditemukan</h1>")
+            return
+
+        # 2. Healthcheck
+        if self.path.startswith("/health"):
             self._send_json(200, {
                 "status": "online",
-                "service": "Kasir Kulkas Webhook Mutasi",
+                "service": "Kasir Kulkas Webhook & Admin Dashboard",
                 "mutasi_count": self.store.count(),
                 "time": datetime.now().isoformat(),
             })
             return
 
-        if self.path.startswith("/mutasi"):
-            recent = self.store.list_recent(window_seconds=3600)
+        # 3. API Sesi Transaksi (dari transaksi.csv)
+        if self.path.startswith("/api/sessions"):
+            sessions = []
+            if TRANSAKSI_CSV_PATH.exists():
+                try:
+                    with TRANSAKSI_CSV_PATH.open(encoding="utf-8", errors="replace") as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            sessions.append(dict(row))
+                    # Urutkan dari yang paling baru
+                    sessions.reverse()
+                except Exception as exc:
+                    print(f"[webhook] Gagal baca transaksi.csv: {exc}")
+            self._send_json(200, {"count": len(sessions), "sessions": sessions})
+            return
+
+        # 4. API Mutasi Masuk
+        if self.path.startswith("/api/mutations") or self.path.startswith("/mutasi"):
+            recent = self.store.list_recent(window_seconds=86400) # 24 jam terakhir
+            recent.reverse()
             data = [
                 {
                     "id": m.id,
@@ -76,6 +128,16 @@ class WebhookHandler(BaseHTTPRequestHandler):
                 for m in recent
             ]
             self._send_json(200, {"count": len(data), "mutasi": data})
+            return
+
+        # 5. Static Image Server untuk Capture Foto
+        if self.path.startswith("/photos/"):
+            filename = self.path.replace("/photos/", "").split("?")[0]
+            # Mencegah path traversal (hanya ambil nama file)
+            safe_name = Path(filename).name
+            target = PELANGGARAN_DIR / safe_name
+            ctype = mimetypes.guess_type(safe_name)[0] or "image/jpeg"
+            self._send_file(target, ctype)
             return
 
         self._send_json(404, {"error": "Not Found"})

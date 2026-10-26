@@ -43,12 +43,28 @@ flowchart TD
     L --> M{Apakah Lolos Validasi?}
     
     M -- Ya --> N[Tahap HASIL: Layar Hijau 'Terima Kasih, Lunas']
-    N --> O[Catat Transaksi ke CSV & Klaim Mutasi Anti-Double-Spend]
+    N --> O[Catat Transaksi ke CSV & Simpan Foto Capture Lunas]
     
     M -- Tidak --> P[Tahap HASIL: Layar Merah 'PERINGATAN PELANGGARAN']
     P --> Q[Alarm Bunyi + Ambil Foto Pembeli & Struk Palsu]
     Q --> R[Kirim Notifikasi Otomatis ke Telegram Bot Admin]
+    
+    O --> S[Admin Dashboard: Tampilkan Sesi Lunas, Mutasi, & Bukti Foto Realtime]
+    Q --> S
 ```
+
+### 2.2 Dashboard Admin & Live Monitoring Web UI
+
+Sistem dilengkapi dengan **Dashboard Web Admin Realtime** yang dapat dibuka di browser laptop kasir maupun dari jarak jauh via smartphone / internet:
+- **URL Lokal**: `http://localhost:8091/admin`
+- **URL Publik (Cloudflare)**: `https://kulkas.ruwwww-thesis.my.id/admin`
+
+Fitur Dashboard Admin:
+1. **Live KPI Cards**: Menampilkan Total Sesi Transaksi, Transaksi Lunas Terverifikasi, Persentase Fraud/Pelanggaran, dan Total Pendapatan Tercatat.
+2. **Tabel Sesi Transaksi**: Daftar seluruh transaksi kasir lengkap dengan filter (*Semua*, *Lunas*, *Pelanggaran*, *Timeout*).
+3. **Modal Viewer Capture Foto**: Admin dapat mengklik tombol **Foto** pada baris transaksi untuk melihat foto resolusi penuh wajah pembeli dan struk yang ditunjukkan.
+4. **Feed Mutasi Masuk**: Menampilkan riwayat dana yang masuk via Midtrans / Bank secara transparan beserta status klaim mutasi.
+5. **Auto-Refresh (Live Sync)**: Dashboard otomatis melakukan sinkronisasi data setiap 2 detik tanpa perlu me-reload halaman.
 
 ---
 
