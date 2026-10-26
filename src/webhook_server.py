@@ -38,14 +38,15 @@ PELANGGARAN_DIR = ROOT / "pelanggaran"
 
 
 def reconcile_pending_transactions(store: MutationStore, tolerance_seconds: int = 180) -> int:
-    """Mencari transaksi berstatus PENDING di transaksi.csv yang cocok dengan mutasi masuk.
-    Jika cocok, status transaksi diupdate menjadi 'LUNAS: TERVERIFIKASI MUTASI ({m.id})'
-    dan mutasi ditandai claimed.
+    """Rekonsiliasi transaksi PENDING di transaksi.csv:
+    1. Jika ada mutasi bank yang cocok dalam jendela waktu → LUNAS: TERVERIFIKASI MUTASI
+    2. Jika sudah lewat jendela toleransi dan tidak ada mutasi → PELANGGARAN: MUTASI_TIDAK_DITEMUKAN
     """
     if not TRANSAKSI_CSV_PATH.exists():
         return 0
 
     resolved_count = 0
+    now = datetime.now()
     try:
         rows = []
         fieldnames = None
@@ -85,6 +86,7 @@ def reconcile_pending_transactions(store: MutationStore, tolerance_seconds: int 
                 total_tagihan = 0
 
             # Cari mutasi yang cocok
+            matched = False
             for m in recent_mutations:
                 if m.claimed:
                     continue
@@ -97,6 +99,7 @@ def reconcile_pending_transactions(store: MutationStore, tolerance_seconds: int 
                     r["status"] = f"LUNAS: TERVERIFIKASI MUTASI ({m.id})"
                     changed = True
                     resolved_count += 1
+                    matched = True
                     print(f"[reconcile] Transaksi {t_str} (Rp {total_tagihan:,}) TERVERIFIKASI oleh mutasi {m.id} (selisih {int(diff_sec)}s)")
 
                     try:
@@ -116,6 +119,31 @@ def reconcile_pending_transactions(store: MutationStore, tolerance_seconds: int 
                     except Exception:
                         pass
                     break
+
+            # Jika tidak ada mutasi yang cocok DAN sudah lewat batas toleransi → PELANGGARAN
+            if not matched:
+                elapsed = (now - tx_dt).total_seconds()
+                if elapsed > tolerance_seconds:
+                    fraud_status = "PELANGGARAN: MUTASI_TIDAK_DITEMUKAN"
+                    r["status"] = fraud_status
+                    changed = True
+                    resolved_count += 1
+                    print(
+                        f"[reconcile] Transaksi {t_str} (Rp {total_tagihan:,}) "
+                        f"TIDAK ADA MUTASI setelah {int(elapsed)}s -> PELANGGARAN"
+                    )
+                    try:
+                        from db import DB_PATH, get_connection
+                        if DB_PATH.exists():
+                            conn = get_connection()
+                            conn.execute(
+                                "UPDATE transactions SET status = ?, fraud_reason = ? WHERE timestamp = ?",
+                                (fraud_status, "MUTASI_TIDAK_DITEMUKAN", t_str),
+                            )
+                            conn.commit()
+                            conn.close()
+                    except Exception:
+                        pass
 
         if changed:
             with TRANSAKSI_CSV_PATH.open("w", newline="", encoding="utf-8") as f:
