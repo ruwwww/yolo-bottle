@@ -139,7 +139,7 @@
               <th class="py-3.5 px-4">Dibayar</th>
               <th class="py-3.5 px-4">Status & Alasan</th>
               <th class="py-3.5 px-4">Referensi</th>
-              <th class="py-3.5 px-4 text-center">Capture Foto (Minuman & Struk)</th>
+              <th class="py-3.5 px-4 text-center">Capture Foto (Minuman, Scan TF, & Pelanggaran)</th>
             </tr>
           </thead>
           <tbody id="sessions-table-body" class="divide-y divide-slate-800/60 font-normal">
@@ -187,9 +187,9 @@
 
   </main>
 
-  <!-- Image Modal Popup (Dual Preview Minuman & Bukti Transfer) -->
+  <!-- Image Modal Popup (3 Foto: Minuman, Scan TF, & Pelanggaran) -->
   <div id="image-modal" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden flex items-center justify-center p-3 sm:p-6" onclick="closeModal()">
-    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-5xl w-full overflow-hidden shadow-2xl relative flex flex-col max-h-[92vh]" onclick="event.stopPropagation()">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-6xl w-full overflow-hidden shadow-2xl relative flex flex-col max-h-[94vh]" onclick="event.stopPropagation()">
       <!-- Modal Header -->
       <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
         <div class="flex items-center gap-3">
@@ -198,7 +198,7 @@
           </div>
           <div>
             <div class="flex items-center gap-2">
-              <h3 class="text-sm sm:text-base font-bold text-white">Inspeksi Sesi Transaksi</h3>
+              <h3 class="text-sm sm:text-base font-bold text-white">Inspeksi Sesi Transaksi & Bukti Foto (3 Foto)</h3>
               <span id="modal-status-badge" class="px-2 py-0.5 rounded text-xs font-semibold"></span>
             </div>
             <p id="modal-time-desc" class="text-xs text-slate-400 mt-0.5"></p>
@@ -209,49 +209,72 @@
         </button>
       </div>
 
-      <!-- Modal Body: 2 Kolom Side-by-Side -->
-      <div class="p-4 sm:p-6 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-4 flex-1">
-        <!-- Kolom Kiri: Scan Botol Minuman -->
+      <!-- Modal Body: 3 Kolom (Minuman, Bukti TF, Foto Pelanggaran) -->
+      <div class="p-4 sm:p-6 overflow-y-auto grid grid-cols-1 md:grid-cols-3 gap-4 flex-1">
+        <!-- Kolom 1: Scan Botol Minuman -->
         <div class="flex flex-col bg-slate-950/60 rounded-xl border border-slate-800 overflow-hidden">
-          <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
+          <div class="px-3.5 py-2.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
             <div class="flex items-center gap-2">
               <i data-lucide="cup-soda" class="w-4 h-4 text-emerald-400"></i>
               <span class="text-xs font-bold text-white uppercase tracking-wider">1. Scan Minuman (YOLO)</span>
             </div>
-            <span id="modal-minuman-tag" class="text-xs text-emerald-400 font-medium"></span>
+            <span id="modal-minuman-tag" class="text-xs text-emerald-400 font-medium truncate max-w-[120px]"></span>
           </div>
-          <div class="p-3 flex items-center justify-center min-h-[240px] max-h-[380px] bg-black/60 relative">
-            <img id="modal-img-minuman" src="" alt="Scan Minuman" class="max-h-[360px] w-auto max-w-full rounded-lg object-contain shadow cursor-pointer transition hover:scale-[1.02]" onclick="openFullImage(this.src)" title="Klik untuk lihat ukuran asli di tab baru">
+          <div class="p-2 flex items-center justify-center min-h-[220px] max-h-[320px] bg-black/60 relative">
+            <img id="modal-img-minuman" src="" alt="Scan Minuman" class="max-h-[300px] w-auto max-w-full rounded-lg object-contain shadow cursor-pointer transition hover:scale-[1.02]" onclick="openFullImage(this.src)" title="Klik untuk lihat ukuran asli di tab baru">
             <div id="modal-no-minuman" class="hidden text-center text-slate-500 p-6 flex flex-col items-center">
               <i data-lucide="image-off" class="w-8 h-8 mb-2 stroke-1 text-slate-600"></i>
-              <span class="text-xs">Foto botol minuman tidak tersedia</span>
+              <span class="text-xs">Foto botol tidak tersedia</span>
             </div>
           </div>
-          <div class="p-3 bg-slate-900/30 border-t border-slate-800 text-xs flex justify-between items-center text-slate-400">
-            <span>Tagihan Minuman:</span>
+          <div class="p-2.5 bg-slate-900/30 border-t border-slate-800 text-xs flex justify-between items-center text-slate-400">
+            <span>Tagihan:</span>
             <span id="modal-bill-val" class="font-mono font-bold text-white"></span>
           </div>
         </div>
 
-        <!-- Kolom Kanan: Bukti Transfer / Layar Struk -->
+        <!-- Kolom 2: Scan Bukti TF (Layar HP / Struk) -->
         <div class="flex flex-col bg-slate-950/60 rounded-xl border border-slate-800 overflow-hidden">
-          <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
+          <div class="px-3.5 py-2.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
             <div class="flex items-center gap-2">
               <i data-lucide="receipt" class="w-4 h-4 text-cyan-400"></i>
-              <span class="text-xs font-bold text-white uppercase tracking-wider">2. Bukti Transfer (OCR Layar)</span>
+              <span class="text-xs font-bold text-white uppercase tracking-wider">2. Scan Bukti TF (Struk)</span>
             </div>
-            <span id="modal-ref-tag" class="text-xs font-mono text-cyan-400"></span>
+            <span id="modal-ref-tag" class="text-xs font-mono text-cyan-400 truncate max-w-[120px]"></span>
           </div>
-          <div class="p-3 flex items-center justify-center min-h-[240px] max-h-[380px] bg-black/60 relative">
-            <img id="modal-img-struk" src="" alt="Bukti Transfer" class="max-h-[360px] w-auto max-w-full rounded-lg object-contain shadow cursor-pointer transition hover:scale-[1.02]" onclick="openFullImage(this.src)" title="Klik untuk lihat ukuran asli di tab baru">
+          <div class="p-2 flex items-center justify-center min-h-[220px] max-h-[320px] bg-black/60 relative">
+            <img id="modal-img-struk" src="" alt="Bukti Transfer" class="max-h-[300px] w-auto max-w-full rounded-lg object-contain shadow cursor-pointer transition hover:scale-[1.02]" onclick="openFullImage(this.src)" title="Klik untuk lihat ukuran asli di tab baru">
             <div id="modal-no-struk" class="hidden text-center text-slate-500 p-6 flex flex-col items-center">
               <i data-lucide="image-off" class="w-8 h-8 mb-2 stroke-1 text-slate-600"></i>
-              <span class="text-xs">Foto bukti transfer tidak tersedia</span>
+              <span class="text-xs">Foto struk tidak tersedia</span>
             </div>
           </div>
-          <div class="p-3 bg-slate-900/30 border-t border-slate-800 text-xs flex justify-between items-center text-slate-400">
-            <span>Nominal Terbaca:</span>
-            <span id="modal-paid-val" class="font-mono font-bold text-emerald-400"></span>
+          <div class="p-2.5 bg-slate-900/30 border-t border-slate-800 text-xs flex justify-between items-center text-slate-400">
+            <span>Nominal TF:</span>
+            <span id="modal-paid-val" class="font-mono font-bold text-cyan-400"></span>
+          </div>
+        </div>
+
+        <!-- Kolom 3: Foto Pelanggaran (Kamera Kasir saat Underpayment / Fraud) -->
+        <div id="modal-card-pelanggaran" class="flex flex-col bg-slate-950/60 rounded-xl border border-rose-900/30 overflow-hidden">
+          <div class="px-3.5 py-2.5 border-b border-rose-900/40 flex items-center justify-between bg-rose-950/20">
+            <div class="flex items-center gap-2">
+              <i data-lucide="alert-triangle" class="w-4 h-4 text-rose-400"></i>
+              <span class="text-xs font-bold text-rose-300 uppercase tracking-wider">3. Foto Pelanggaran (Kasir)</span>
+            </div>
+            <span id="modal-fraud-tag" class="text-xs font-semibold text-rose-400 truncate max-w-[120px]"></span>
+          </div>
+          <div class="p-2 flex items-center justify-center min-h-[220px] max-h-[320px] bg-black/60 relative">
+            <img id="modal-img-pelanggaran" src="" alt="Foto Pelanggaran" class="max-h-[300px] w-auto max-w-full rounded-lg object-contain shadow cursor-pointer transition hover:scale-[1.02]" onclick="openFullImage(this.src)" title="Klik untuk lihat ukuran asli di tab baru">
+            <div id="modal-no-pelanggaran" class="hidden text-center text-slate-500 p-6 flex flex-col items-center">
+              <i data-lucide="shield-check" class="w-8 h-8 mb-2 stroke-1 text-emerald-500"></i>
+              <span class="text-xs text-emerald-400 font-semibold">Tidak Ada Pelanggaran</span>
+              <span class="text-[11px] text-slate-500 mt-0.5">Pembayaran Lunas Sesuai Tagihan</span>
+            </div>
+          </div>
+          <div class="p-2.5 bg-slate-900/30 border-t border-slate-800 text-xs flex justify-between items-center text-slate-400">
+            <span>Status Kejadian:</span>
+            <span id="modal-fraud-status-val" class="font-bold text-rose-400"></span>
           </div>
         </div>
       </div>
@@ -263,10 +286,13 @@
         </div>
         <div class="flex items-center gap-2">
           <button id="modal-btn-view-minuman" onclick="" class="hidden px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition">
-            Buka Foto Minuman
+            Unduh Foto Minuman
           </button>
           <button id="modal-btn-view-struk" onclick="" class="hidden px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition">
-            Buka Foto Struk
+            Unduh Scan TF
+          </button>
+          <button id="modal-btn-view-pelanggaran" onclick="" class="hidden px-3 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/40 text-rose-300 hover:text-white transition">
+            Unduh Foto Pelanggaran
           </button>
         </div>
       </div>
@@ -388,26 +414,30 @@
 
         const fotoStruk = s.foto || '';
         const fotoMinuman = s.foto_minuman || '';
-        const hasMinuman = Boolean(fotoMinuman);
-        const hasStruk = Boolean(fotoStruk);
+        const fotoPelanggaran = s.foto_pelanggaran || '';
+        const isPelanggaran = status.includes('PELANGGARAN') || status === 'TIMEOUT';
 
         let fotoControls = `
-          <div class="flex items-center justify-center gap-1.5">
-            <button onclick="openModal(${originalIndex})" title="${hasMinuman ? 'Lihat Foto Minuman' : 'Foto minuman belum tersedia'}" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition ${hasMinuman ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800/30 text-slate-600 border border-slate-800 cursor-not-allowed'}" ${!hasMinuman ? 'disabled' : ''}>
+          <div class="flex items-center justify-center gap-1.5 flex-wrap">
+            <button onclick="openModal(${originalIndex})" title="${fotoMinuman ? 'Lihat Foto Botol Minuman' : 'Foto minuman belum tersedia'}" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition ${fotoMinuman ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800/30 text-slate-600 border border-slate-800 cursor-not-allowed'}" ${!fotoMinuman ? 'disabled' : ''}>
               <i data-lucide="cup-soda" class="w-3.5 h-3.5"></i>
               <span>Minuman</span>
             </button>
-            <button onclick="openModal(${originalIndex})" title="${hasStruk ? 'Lihat Bukti Transfer' : 'Bukti transfer belum tersedia'}" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition ${hasStruk ? 'bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' : 'bg-slate-800/30 text-slate-600 border border-slate-800 cursor-not-allowed'}" ${!hasStruk ? 'disabled' : ''}>
+            <button onclick="openModal(${originalIndex})" title="${fotoStruk ? 'Lihat Scan Bukti Transfer' : 'Scan bukti transfer belum tersedia'}" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition ${fotoStruk ? 'bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' : 'bg-slate-800/30 text-slate-600 border border-slate-800 cursor-not-allowed'}" ${!fotoStruk ? 'disabled' : ''}>
               <i data-lucide="receipt" class="w-3.5 h-3.5"></i>
-              <span>Bukti TF</span>
+              <span>Scan TF</span>
             </button>
-            <button onclick="openModal(${originalIndex})" title="Inspeksi Kedua Foto Berdampingan" class="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition">
-              <i data-lucide="split" class="w-3.5 h-3.5"></i>
+            <button onclick="openModal(${originalIndex})" title="${fotoPelanggaran ? 'Lihat Foto Pelanggaran Kasir' : (isPelanggaran ? 'Foto pelanggaran belum tersedia' : 'Tidak ada pelanggaran (Lunas)')}" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition ${isPelanggaran && fotoPelanggaran ? 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 border border-rose-500/40 animate-pulse' : (isPelanggaran ? 'bg-rose-500/10 text-rose-500/60 border border-rose-900/40' : 'bg-slate-800/30 text-slate-600 border border-slate-800 cursor-not-allowed')}" ${!fotoPelanggaran ? 'disabled' : ''}>
+              <i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i>
+              <span>Pelanggaran</span>
+            </button>
+            <button onclick="openModal(${originalIndex})" title="Inspeksi Semua 3 Foto Sesi Ini" class="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition">
+              <i data-lucide="scan-eye" class="w-3.5 h-3.5"></i>
             </button>
           </div>
         `;
 
-        if (!hasMinuman && !hasStruk) {
+        if (!fotoMinuman && !fotoStruk && !fotoPelanggaran) {
           fotoControls = '<span class="text-xs text-slate-600">-</span>';
         }
 
@@ -523,6 +553,34 @@
         imgStruk.classList.add('hidden');
         noStruk.classList.remove('hidden');
         btnViewStruk.classList.add('hidden');
+      }
+
+      // 3. Foto Pelanggaran (Kamera Kasir saat Underpayment / Fraud)
+      const fotoPelanggaran = s.foto_pelanggaran || '';
+      const isPelanggaran = (s.status || '').toUpperCase().includes('PELANGGARAN') || (s.status || '').toUpperCase() === 'TIMEOUT';
+      const imgPelanggaran = document.getElementById('modal-img-pelanggaran');
+      const noPelanggaran = document.getElementById('modal-no-pelanggaran');
+      const btnViewPelanggaran = document.getElementById('modal-btn-view-pelanggaran');
+      const fraudTag = document.getElementById('modal-fraud-tag');
+      const fraudStatusVal = document.getElementById('modal-fraud-status-val');
+
+      if (isPelanggaran && fotoPelanggaran) {
+        const fnPelanggaran = fotoPelanggaran.split(/[\\\\/]/).pop();
+        const srcPelanggaran = '/photos/' + fnPelanggaran;
+        imgPelanggaran.src = srcPelanggaran;
+        imgPelanggaran.classList.remove('hidden');
+        noPelanggaran.classList.add('hidden');
+        fraudTag.innerText = statusLabel;
+        fraudStatusVal.innerText = statusLabel;
+        btnViewPelanggaran.classList.remove('hidden');
+        btnViewPelanggaran.onclick = () => window.open(srcPelanggaran, '_blank');
+      } else {
+        imgPelanggaran.src = '';
+        imgPelanggaran.classList.add('hidden');
+        noPelanggaran.classList.remove('hidden');
+        fraudTag.innerText = isPelanggaran ? statusLabel : 'Aman (Lunas)';
+        fraudStatusVal.innerText = isPelanggaran ? 'Foto tidak tersedia' : 'Aman (Lunas)';
+        btnViewPelanggaran.classList.add('hidden');
       }
 
       // Reconcile note footer

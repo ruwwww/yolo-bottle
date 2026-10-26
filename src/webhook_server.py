@@ -107,11 +107,18 @@ class WebhookHandler(BaseHTTPRequestHandler):
                             item = dict(row)
                             foto_struk = item.get("foto", "") or ""
                             foto_minuman = item.get("foto_minuman", "") or ""
+                            foto_pelanggaran = item.get("foto_pelanggaran", "") or ""
+                            st = (item.get("status", "") or "").upper()
+                            is_pelanggaran = "PELANGGARAN" in st or "TIMEOUT" in st
 
-                            # Smart inference jika foto_minuman belum ada di CSV lama
-                            if not foto_minuman and foto_struk:
-                                f_stem = Path(foto_struk).stem
-                                for suffix in ("_full", "_ok", "_ok_struk"):
+                            # Smart inference jika log lama hanya punya 1 atau 2 path:
+                            if is_pelanggaran and not foto_pelanggaran and foto_struk:
+                                foto_pelanggaran = foto_struk
+
+                            if not foto_minuman and (foto_struk or foto_pelanggaran):
+                                ref_path = foto_struk or foto_pelanggaran
+                                f_stem = Path(ref_path).stem
+                                for suffix in ("_full", "_ok", "_ok_struk", "_struk", "_pelanggaran"):
                                     if f_stem.endswith(suffix):
                                         base_ts = f_stem[:-len(suffix)]
                                         for cand_name in (f"{base_ts}_minuman.jpg", f"{base_ts}_ok_minuman.jpg"):
@@ -120,7 +127,10 @@ class WebhookHandler(BaseHTTPRequestHandler):
                                                 foto_minuman = str(cand_path)
                                                 break
                                         break
+
+                            item["foto"] = foto_struk
                             item["foto_minuman"] = foto_minuman
+                            item["foto_pelanggaran"] = foto_pelanggaran
                             sessions.append(item)
                     # Urutkan dari yang paling baru
                     sessions.reverse()
@@ -153,6 +163,12 @@ class WebhookHandler(BaseHTTPRequestHandler):
             # Mencegah path traversal (hanya ambil nama file)
             safe_name = Path(filename).name
             target = PELANGGARAN_DIR / safe_name
+            if not target.exists():
+                for arch_dir in ROOT.glob("archive/*/pelanggaran"):
+                    cand = arch_dir / safe_name
+                    if cand.exists():
+                        target = cand
+                        break
             ctype = mimetypes.guess_type(safe_name)[0] or "image/jpeg"
             self._send_file(target, ctype)
             return

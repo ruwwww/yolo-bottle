@@ -229,6 +229,7 @@ class KasirKulkas:
         self.hitung: Counter = Counter()
         self.total_minuman = 0
         self.frame_minuman = None
+        self.frame_struk = None
         self.pesan = pesan
         self.pesan2 = ""
         self.warna: tuple[int, int, int] = (255, 255, 255)
@@ -260,7 +261,7 @@ class KasirKulkas:
 
         threading.Thread(target=_b, daemon=True).start()
 
-    def _catat(self, minuman: str, total: int, status: str, foto: str = "", foto_minuman: str = ""):
+    def _catat(self, minuman: str, total: int, status: str, foto: str = "", foto_minuman: str = "", foto_pelanggaran: str = ""):
         baru = not self.log.exists()
         now_dt = datetime.now()
         now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -268,7 +269,7 @@ class KasirKulkas:
             w = csv.writer(f)
             if baru:
                 w.writerow(
-                    ["waktu", "referensi", "dibayar", "minuman", "harga_minuman", "status", "foto", "foto_minuman"]
+                    ["waktu", "referensi", "dibayar", "minuman", "harga_minuman", "status", "foto", "foto_minuman", "foto_pelanggaran"]
                 )
             w.writerow(
                 [
@@ -280,6 +281,7 @@ class KasirKulkas:
                     status,
                     foto,
                     foto_minuman,
+                    foto_pelanggaran,
                 ]
             )
 
@@ -300,7 +302,7 @@ class KasirKulkas:
                 status=status,
                 fraud_reason=reason,
                 reference_no=self.ref,
-                photo_full_path=foto,
+                photo_full_path=foto_pelanggaran or foto,
                 photo_item_path=foto_minuman,
             )
         except Exception as exc:
@@ -531,6 +533,7 @@ class KasirKulkas:
             if jumlah:
                 self.dibayar = jumlah
                 self.ref = data.get("referensi", "-")
+                self.frame_struk = frame.copy()
                 waktu_struk = data.get("waktu_struk")
                 now = datetime.now()
                 is_ok, reason, detail = self.reconciler.verify(
@@ -597,12 +600,23 @@ class KasirKulkas:
         if is_pelanggaran:
             self.pelanggaran = True
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            foto = self.folder / f"{ts}_full.jpg"
-            cv2.imwrite(str(foto), frame)
+            # 1. Foto Minuman
             foto_minuman = None
             if frame_minuman is not None:
                 foto_minuman = self.folder / f"{ts}_minuman.jpg"
                 cv2.imwrite(str(foto_minuman), frame_minuman)
+
+            # 2. Foto Scan Bukti TF (Layar HP struk saat dihadapkan ke kamera)
+            foto_struk = None
+            frame_bukti = getattr(self, "frame_struk", None)
+            if frame_bukti is not None:
+                foto_struk = self.folder / f"{ts}_struk.jpg"
+                cv2.imwrite(str(foto_struk), frame_bukti)
+
+            # 3. Foto Pelanggaran (Kamera kasir saat alarm pelanggaran aktif: orang / pelaku)
+            foto_pelanggaran = self.folder / f"{ts}_pelanggaran.jpg"
+            cv2.imwrite(str(foto_pelanggaran), frame)
+
             if alasan:
                 label_alasan = alasan.replace("PELANGGARAN_", "").replace("_", " ")
                 self.pesan = f"PERINGATAN! {label_alasan[:35]}"
@@ -613,26 +627,39 @@ class KasirKulkas:
             self.warna = (0, 0, 255)
             self._bunyi()
             status_log = f"PELANGGARAN: {alasan}" if alasan else "PELANGGARAN"
-            print(f"[kasir] {status_log} {daftar} total={fmt_rupiah(total)} -> {foto}")
-            self._catat(daftar, total, status_log, str(foto), str(foto_minuman) if foto_minuman else "")
+            print(f"[kasir] {status_log} {daftar} total={fmt_rupiah(total)} -> {foto_pelanggaran}")
+            self._catat(
+                daftar, total, status_log,
+                foto=str(foto_struk) if foto_struk else "",
+                foto_minuman=str(foto_minuman) if foto_minuman else "",
+                foto_pelanggaran=str(foto_pelanggaran),
+            )
             self._kirim_telegram(
-                foto_minuman or foto, foto, daftar, total, max(0, total - self.dibayar),
+                foto_pelanggaran, foto_struk or foto_pelanggaran, daftar, total, max(0, total - self.dibayar),
                 catatan=f"Alasan: {alasan}" if alasan else ""
             )
         else:
             lebih = self.dibayar - total
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            foto = self.folder / f"{ts}_ok.jpg"
-            cv2.imwrite(str(foto), frame)
             foto_minuman = None
             if frame_minuman is not None:
                 foto_minuman = self.folder / f"{ts}_ok_minuman.jpg"
                 cv2.imwrite(str(foto_minuman), frame_minuman)
+
+            frame_bukti = getattr(self, "frame_struk", None) or frame
+            foto_struk = self.folder / f"{ts}_ok_struk.jpg"
+            cv2.imwrite(str(foto_struk), frame_bukti)
+
             self.pesan = f"Terima kasih! {daftar}"
             self.pesan2 = f"Lebih bayar {fmt_rupiah(lebih)}" if lebih else "Pembayaran pas"
             self.warna = (0, 255, 0)
-            print(f"[kasir] OK {daftar} total={fmt_rupiah(total)} -> {foto}")
-            self._catat(daftar, total, "OK", str(foto), str(foto_minuman) if foto_minuman else "")
+            print(f"[kasir] OK {daftar} total={fmt_rupiah(total)} -> {foto_struk}")
+            self._catat(
+                daftar, total, "OK",
+                foto=str(foto_struk),
+                foto_minuman=str(foto_minuman) if foto_minuman else "",
+                foto_pelanggaran="",
+            )
 
     def _kirim_telegram(self, foto, foto_bayar, daftar, total, kurang, catatan: str = ""):
         bot = self.telegram

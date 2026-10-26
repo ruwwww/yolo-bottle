@@ -190,18 +190,13 @@ def record_transaction(
         cur.execute(
             """
             INSERT INTO fraud_logs (
-                transaction_id, violation_type, detected_at,
-                amount_bill, amount_paid, photo_proof_path, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                transaction_id, fraud_type, details
+            ) VALUES (?, ?, ?)
             """,
             (
                 tx_id,
                 fraud_reason or "PELANGGARAN",
-                timestamp,
-                total_amount,
-                paid_amount,
-                photo_full_path or photo_item_path,
-                f"Referensi: {reference_no}",
+                f"Tagihan: Rp {total_amount:,} | Bayar: Rp {paid_amount:,} | Foto: {photo_full_path or photo_item_path}",
             ),
         )
     conn.commit()
