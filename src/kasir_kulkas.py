@@ -479,6 +479,7 @@ class KasirKulkas:
         gen = self.midtrans_poll_gen
         order_id = f"KASIR-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
         self.midtrans_order_id = order_id
+        self.ref = order_id
         self.midtrans_qr = None
         self.midtrans_paid = False
 
@@ -508,7 +509,7 @@ class KasirKulkas:
                 st = self.midtrans.check_status(order_id)
                 if st and self.midtrans.is_settled(st):
                     print(f"[kasir] pembayaran Midtrans lunas: {order_id}")
-                    # Catat mutasi masuk ke MutationStore kasir
+                    # Catat mutasi masuk ke MutationStore kasir dan langsung KLAIM
                     self.mutation_store.add(
                         m_id=order_id,
                         amount=total,
@@ -516,10 +517,9 @@ class KasirKulkas:
                         source="midtrans",
                         ref=order_id,
                     )
+                    self.mutation_store.claim(order_id)
+                    self.reconciler.store.claim(order_id)
                     self.midtrans_paid = True
-                    self.pesan = "Uang Midtrans masuk! Tunjukkan STRUK HP"
-                    self.pesan2 = "Hadapkan layar struk HP ke kamera untuk verifikasi"
-                    self.warna = (0, 235, 255)
                     break
 
         threading.Thread(target=_worker, daemon=True, name="midtrans").start()
@@ -529,6 +529,9 @@ class KasirKulkas:
         if getattr(self, "midtrans_paid", False):
             self.dibayar = self.total_minuman
             self.ref = getattr(self, "midtrans_order_id", "-")
+            if self.ref and self.ref != "-":
+                self.mutation_store.claim(self.ref)
+                self.reconciler.store.claim(self.ref)
             print(f"[kasir] Pembayaran Midtrans Snap QR terkonfirmasi lunas otomatis: {self.ref}")
             self._evaluasi(frame, self.hitung, self.frame_minuman, kategori="OK_REKONSILIASI_MUTASI")
             return
@@ -541,7 +544,11 @@ class KasirKulkas:
             self.last_amount = jumlah or self.last_amount
             if jumlah:
                 self.dibayar = jumlah
-                self.ref = data.get("referensi", "-")
+                ref_ocr = data.get("referensi", "-")
+                if ref_ocr and ref_ocr != "-":
+                    self.ref = ref_ocr
+                elif not self.ref or self.ref == "-":
+                    self.ref = getattr(self, "midtrans_order_id", "-")
                 self.frame_struk = frame.copy()
                 waktu_struk = data.get("waktu_struk")
                 now = datetime.now()

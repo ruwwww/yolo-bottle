@@ -126,22 +126,47 @@ class MutationStore:
         self._mutations: dict[str, Mutation] = {}
         self._load_existing()
 
+    def _get_claimed_from_transactions(self) -> set[str]:
+        claimed_ids = set()
+        csv_path = ROOT / "transaksi.csv"
+        if not csv_path.exists():
+            return claimed_ids
+        try:
+            with csv_path.open(encoding="utf-8", errors="replace") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    st = (r.get("status") or "").upper()
+                    if "LUNAS" in st or "OK" in st:
+                        ref = (r.get("referensi") or "").strip()
+                        if ref and ref != "-":
+                            claimed_ids.add(ref)
+                        m_match = re.search(r"\(([^)]+)\)", st)
+                        if m_match:
+                            claimed_ids.add(m_match.group(1).strip())
+        except Exception:
+            pass
+        return claimed_ids
+
     def _load_existing(self):
         if not self.log_path.exists():
             return
+        claimed_from_csv = self._get_claimed_from_transactions()
         try:
             for line in self.log_path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
                 d = json.loads(line)
                 ts = datetime.fromisoformat(d["timestamp"])
+                m_id = str(d["id"])
+                # Mutasi diklaim jika ditandai claimed di jsonl ATAU sudah dipakai di transaksi.csv
+                is_claimed = bool(d.get("claimed", False)) or (m_id in claimed_from_csv)
                 m = Mutation(
-                    id=str(d["id"]),
+                    id=m_id,
                     amount=int(d["amount"]),
                     timestamp=ts,
                     source=d.get("source", "log"),
                     ref=d.get("ref", "-"),
-                    claimed=bool(d.get("claimed", False)),
+                    claimed=is_claimed,
                     raw=d.get("raw"),
                 )
                 self._mutations[m.id] = m
@@ -285,6 +310,12 @@ class Reconciler:
             if m.claimed:
                 continue
             if m.amount < total_tagihan:
+                continue
+
+            # Anti-Double Spend / Hijack: Mutasi Midtrans Snap dinamis (KASIR-...)
+            # hanya milik sesi pembayaran di layar kasir, tidak boleh diklaim oleh struk OCR lain
+            # kecuali nomor referensi di struk persis mencantumkan ID tersebut!
+            if m.id.startswith("KASIR-") and referensi.strip().upper() != m.id.upper():
                 continue
 
             # Bandingkan waktu mutasi dengan waktu scan & waktu struk

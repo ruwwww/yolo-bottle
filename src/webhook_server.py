@@ -93,6 +93,12 @@ def reconcile_pending_transactions(store: MutationStore, tolerance_seconds: int 
                 if m.amount < total_tagihan:
                     continue
 
+                # Anti-Double Spend / Hijack: Jika mutasi adalah Midtrans Snap order_id (KASIR-...),
+                # ia hanya boleh diklaim jika referensi transaksi cocok dengan ID-nya!
+                tx_ref = (r.get("referensi") or "").strip().upper()
+                if m.id.startswith("KASIR-") and tx_ref != m.id.upper():
+                    continue
+
                 diff_sec = abs((m.timestamp - tx_dt).total_seconds())
                 if diff_sec <= tolerance_seconds:
                     store.claim(m.id)
